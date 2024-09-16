@@ -13,8 +13,9 @@ import plotting_helpers
 
 def calculate_statistics(d, key, instance, temperatures, pargs):
     for arg_name, arg_value in vars(pargs).items():
-        if arg_value:  # Check if the argument is True
-            print('Calculating statistics for instance {} of freq {}'.format(arg_name, instance, key))
+        if arg_name not in ['save_folder', 'p', 'investigate', 'window_size_seconds']:
+            if arg_value:  # Check if the argument is True
+                print('Calculating statistics for {} instance {} of freq {}'.format(arg_name, instance, key))
     # flash timing limits
     min_cutoff = 0.166
     max_cutoff = 3.0
@@ -69,7 +70,7 @@ def calculate_statistics(d, key, instance, temperatures, pargs):
     rolling_flash_periods_after = [y for x in rolling_flash_avg_flash_times_after if len(x) >= min_flashes_in_window
                                    for y in np.diff(x)]
     rolling_flash_periods_after, all_periods_after = helpers.adjust_for_offset(k1, k2, rolling_flash_periods_after,
-                                                                       all_periods_after, trial_params)
+                                                                               all_periods_after, trial_params)
 
     rolling_avg_interflash, flash_times_to_plot, mean_interflashes_before, mean_interflashes_after = helpers.r_means(
         rolling_flash_avg_flash_times, led_introduced)
@@ -226,6 +227,7 @@ def calculate_statistics(d, key, instance, temperatures, pargs):
             max_cc_a = 0
             all_cc_lens_a = []
             area_after = 0
+
     else:
         area_before = None
         area_after = None
@@ -350,14 +352,7 @@ def sliding_window_stats(d, pargs):
     else:
         rmse_means = None
 
-    cutoff_2021 = {'300': 0,
-                   '400': 0,
-                   '500': 0,
-                   '600': 14,
-                   '700': 8,
-                   '770': 10,
-                   '850': 10,
-                   '1000': 8}
+    cutoff_2021 = helpers.cutoff_2021()
     for k in ks:
         for j in range(len(list(d[k]))):
             # not doing anything with temperature right now
@@ -383,6 +378,7 @@ def sliding_window_stats(d, pargs):
                         rmses[stat_key][k] = [rmse[stat_key]]
                     else:
                         rmses[stat_key][k].append(rmse[stat_key])
+
                 elif stat_key == 'individual_before' \
                         or stat_key == 'individual_after' \
                         or stat_key == 'ff_led_diffs' or stat_key == 'led_ff_diffs':
@@ -390,29 +386,41 @@ def sliding_window_stats(d, pargs):
                         rmses[stat_key][k] = [rmse[stat_key]]
                     else:
                         rmses[stat_key][k].append(rmse[stat_key])
+
                 elif stat_key == 'rmses_over_time':
                     if not rmses[stat_key].get(k):
                         rmses[stat_key][k] = [rmse[stat_key]]
                     else:
                         rmses[stat_key][k].append(rmse[stat_key])
+
                 elif stat_key == 'all_cc_lens_before' or stat_key == 'all_cc_lens_after':
-                    if not rmses[stat_key].get(k):
-                        rmses[stat_key][k] = [s for s in rmse[stat_key]]
-                    else:
-                        rmses[stat_key][k].extend([s for s in rmse[stat_key]])
+                    try:
+                        if not rmses[stat_key].get(k):
+                            rmses[stat_key][k] = [s for s in rmse[stat_key]]
+                        else:
+                            rmses[stat_key][k].extend([s for s in rmse[stat_key]])
+                    except ValueError:
+                        if not rmses[stat_key].get(k):
+                            rmses[stat_key][k] = [rmse[stat_key]]
+                        else:
+                            rmses[stat_key][k].append(rmse[stat_key])
+                    except TypeError:
+                        if not rmses[stat_key].get(k):
+                            rmses[stat_key][k] = [rmse[stat_key]]
+                        else:
+                            rmses[stat_key][k].append(rmse[stat_key])
                 else:
                     try:
-                        if not np.isnan(rmse[stat_key]):
-                            if not rmses[stat_key].get(k):
-                                rmses[stat_key][k] = [rmse[stat_key]]
-                            else:
-                                rmses[stat_key][k].append(rmse[stat_key])
+                        if not rmses[stat_key].get(k):
+                            rmses[stat_key][k] = [s for s in rmse[stat_key]]
                         else:
-                            if not rmses[stat_key].get(k):
-                                rmses[stat_key][k] = [rmse[stat_key]]
-                            else:
-                                rmses[stat_key][k].append(rmse[stat_key])
+                            rmses[stat_key][k].extend([s for s in rmse[stat_key]])
                     except ValueError:
+                        if not rmses[stat_key].get(k):
+                            rmses[stat_key][k] = [rmse[stat_key]]
+                        else:
+                            rmses[stat_key][k].append(rmse[stat_key])
+                    except TypeError:
                         if not rmses[stat_key].get(k):
                             rmses[stat_key][k] = [rmse[stat_key]]
                         else:
@@ -431,102 +439,108 @@ def aggregate_timeseries(path, pargs):
     # Load the timeseries from path objects
     # Returns a paired list of firefly [0] and led [1] timeseries
     #
-    fp = path + '/just_timeseries/'
+
     all_data = {}
+    date = path.split('_')[0]
+    key = path.split('_')[1]
+
     if pargs.log:
-        print('Loading timeseries')
-
-    for f in os.listdir(fp):
-        if '2021' in fp:
+        print('Loading timeseriesfrom {} with led freq {}'.format(date, key))
+    if all_data.get(key) is None:
+        all_data[key] = []
+    with open(pargs.data_path + '/' + path, 'r') as data_file:
+        ts = {'ff': [],
+              'led': []
+              }
+        data = csv.reader(data_file)
+        next(data)
+        for line in data:
             try:
-                k = '{}'.format(int(f.split('.csv')[0].split('0.')[1].split('led')[0]) * 10)
+                ts['ff'].append(line[0])
+                ts['led'].append(line[1])
             except IndexError:
-                k = '{}'.format(float(f.split('.csv')[0].split('0529_')[1].split('led')[0]) * 10)
-            key = helpers.tighten(k)
-        else:
-            k = '{}'.format(int(f.split('.csv')[0].split('_')[1].split('ms')[0]))
-            if k == '1' or k == '2':
-                k = '{}'.format(int(f.split('.csv')[0].split('_')[2].split('ms')[0]))
-            key = k
-        if pargs.log:
-            print('from {} with led freq {}'.format(f, key))
-
-        if all_data.get(key) is None:
-            all_data[key] = []
-        with open(fp + f, 'r') as data_file:
-            ts = {'ff': [],
-                  'led': []
-                  }
-            data = csv.reader(data_file)
-            next(data)
-            for line in data:
-                try:
-                    ts['ff'].append(line[0])
-                    ts['led'].append(line[1])
-                except IndexError:
-                    raise('Problem loading data from {} with led freq {}'.format(f, key))
+                raise ('Problem loading data from {} with led freq {}'.format(f, key))
 
         all_data[key].append(ts)
     return all_data
 
 
-def write_timeseries_figs(paths, pargs):
+def write_timeseries_figs(pargs):
     #
     # Write the timeseries figures path objects
     # Interactive timeseries plots for any given day - the raw data
     #
-    plot_params = pargs
+    fpaths = os.listdir(pargs.data_path)
+    for fp in fpaths:
+        try:
+            date = fp.split('_')[0]
+            key = fp.split('_')[1]
+            index = fp.split('_')[2].split('.')[0]
+        except IndexError:
+            print('Ignoring {}'.format(fp))
+            continue
+        if pargs.log:
+            print('Writing timeseries from {} with led freq {}'.format(date, key))
 
-    for path in paths:
-        fp = path + '/just_timeseries/'
-        all_data = {}
-        for f in os.listdir(fp):
-            if '2022' not in fp:
+        with open(pargs.data_path + '/' + fp, 'r') as data_file:
+            ts = {'ff': [],
+                  'led': []
+                  }
+            data = csv.reader(data_file)
+            data_list = list(data)
+
+            for line in data_list[1:]:
                 try:
-                    k = '{}'.format(int(f.split('.csv')[0].split('0.')[1].split('led')[0]) * 10)
+                    ts['ff'].append(line[0])
+                    ts['led'].append(line[1])
                 except IndexError:
-                    k = '{}'.format(float(f.split('.csv')[0].split('0529_')[1].split('led')[0]) * 10)
-                key = helpers.tighten(k)
-            else:
-                k = '{}'.format(int(f.split('.csv')[0].split('_')[1].split('ms')[0]))
-                if k == '1' or k == '2':
-                    k = '{}'.format(int(f.split('.csv')[0].split('_')[2].split('ms')[0]))
-                key = helpers.tighten(k)
+                    print('Error loading data with {}'.format(fp))
 
-            if all_data.get(key) is None:
-                all_data[key] = []
-            with open(fp + f, 'r') as data_file:
-                ts = {'ff': [],
-                      'led': []
-                      }
-                data = csv.reader(data_file)
-                next(data)
-                for line in data:
-                    try:
-                        ts['ff'].append(line[0])
-                        ts['led'].append(line[1])
-                    except IndexError:
-                        print('Error loading data with {}'.format(fp))
+            ff_xs = np.array([float(eval(x)[0]) for x in ts['ff']])
+            ff_ys = np.array([0.0 if float(eval(x)[1]) == 0.0 else 0.5 for x in ts['ff']])
+            masked_ff = ff_ys > 0.01
 
-            ff_xs = [float(eval(x)[0]) for x in ts['ff']]
-            ff_ys = [float(eval(x)[1]) for x in ts['ff']]
-            fig = make_subplots(rows=1, cols=1)
-            led_xs = [float(eval(x)[0]) for x in ts['led']]
-            led_ys = [float(eval(x)[1]) for x in ts['led']]
+            led_xs = np.array([float(eval(x)[0]) for x in ts['led']])
+            led_ys = np.array([0.5 if float(eval(x)[1]) == 1.0 else 0.53 for x in ts['led']])
+            masked_led = led_ys > 0.50
+
+            fig = make_subplots(
+                rows=1, cols=1,  # 2 rows, 1 column
+                shared_xaxes=True,  # Share the x-axis between subplots
+                vertical_spacing=0
+            )
+
             fig.add_trace(
-                go.Scatter(x=led_xs, y=led_ys, name='LED')
+                go.Scatter(x=led_xs[masked_led], y=led_ys[masked_led], mode='markers', name='LED', marker=dict(color='orange')),
+                row=1, col=1
             )
             fig.add_trace(
-                go.Scatter(x=ff_xs, y=ff_ys, name='FF')
+                go.Bar(x=led_xs[masked_led], y=led_ys[masked_led], name='LED', marker=dict(color='orange')),
+                row=1, col=1
             )
-            fig.update_xaxes(title_text="T[s]", row=1, col=1,  showgrid=False )
-            fig.update_yaxes(title_text="Flash", row=1, col=1,  showgrid=False )
-            fig.write_html(plot_params.save_folder+"timeseries_plots/{}/".format(key) + "{}_{}.html".format(
-                f.split('.csv')[0].split('_')[0], path))
+            fig.add_trace(
+                go.Scatter(x=ff_xs[masked_ff], y=ff_ys[masked_ff], name='FF', mode='markers', marker=dict(color='green')),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Bar(x=ff_xs[masked_ff], y=ff_ys[masked_ff], name='FF', marker=dict(color='green')),
+                row=1, col=1
+            )
+
+            fig.update_layout(
+                height=600,
+                showlegend=True,
+                barmode='overlay'
+            )
+            fig.update_yaxes(range=[0.2, 0.8], row=1, col=1)
+            fig.update_xaxes(matches='x')
+            fig.update_yaxes(matches='y1')
+            fig.write_html(pargs.save_folder + '/timeseries/{}_{}_{}.html'.format(
+                date, key, index)
+            )
 
 
-def investigate_timeseries(fpaths, pargs):
-    plot_params = pargs
+def investigate_timeseries(pargs):
     final_dict = {
         '300': [],
         '400': [],
@@ -537,7 +551,8 @@ def investigate_timeseries(fpaths, pargs):
         '850': [],
         '1000': [],
     }
-
+    ks = list(final_dict.keys())
+    fpaths = os.listdir(pargs.data_path)
     for path in fpaths:
         d = aggregate_timeseries(path, pargs)
         for key in d:
@@ -546,10 +561,8 @@ def investigate_timeseries(fpaths, pargs):
             else:
                 final_dict[key] = d[key]
 
-    timeseries_stats, _ = sliding_window_stats(final_dict, plot_params)
-    plot_params.single_flash_intervals = np.loadtxt('single_firefly_intervals.csv', dtype=float)
-    ks = list(final_dict.keys())
-    plotting_helpers.plot_statistics(timeseries_stats, ks, plot_params)
+    timeseries_stats, _ = sliding_window_stats(final_dict, pargs)
+    plotting_helpers.plot_statistics(timeseries_stats, ks, pargs)
 
 
 if __name__ == '__main__':
@@ -558,7 +571,7 @@ if __name__ == '__main__':
     # usage for paper figures:
     # python led_analysis.py
     # -i
-    # --do_delay_plot --windowed_period_plot --do_boxplots --do_period_over_time --p --do_recurrence_diagrams
+    # --do_delay_plot --do_windowed_period_plot --do_boxplots --p
     # --window_size_seconds 5
     # --save_folder relative/path/to/save/folder
 
@@ -572,7 +585,7 @@ if __name__ == '__main__':
     parser.add_argument('-w', '--write_timeseries', action='store_true', help='Whether to plot interactive timeseries')
 
     parser.add_argument('--do_delay_plot', action='store_true', help='Whether to plot delay plots')
-    parser.add_argument('--windowed_period_plot', action='store_true', help='Whether to plot period plots')
+    parser.add_argument('--do_windowed_period_plot', action='store_true', help='Whether to plot period plots')
     parser.add_argument('--do_boxplots', action='store_true', help='Whether to plot boxplot comparisons')
     parser.add_argument('--save_data', action='store_true', help='Whether to save aggregate data for faster loading')
     parser.add_argument('--load_data_from_dists', action='store_true',
@@ -588,19 +601,15 @@ if __name__ == '__main__':
     parser.add_argument('--window_size_seconds', type=int, default=5, help='Window size, in seconds, for ts analysis')
     parser.add_argument('--p', action='store_true', help='Whether to correct for bkgrd stack offset')
     parser.add_argument('--log', action='store_true', help='Whether to log data')
+    parser.add_argument('--data_path', type=str, default='data_paths')
 
-    parser.add_argument('--save_folder',
-                        default='analysis/analysis_2024',
+    parser.add_argument('--save_folder', type=str,
+                        default='figs',
                         help='Folder path for saving')
 
     args = parser.parse_args()
 
-    paths = ['05212021', '05222021', '05232021', '05242021', '05252021', '05262021', '05272021', '05282021', '05292021']
-    paths_2022 = ['20220518', '20220519', '20220520', '20220521', '20220524', '20220525', '20220526', '20220529']
-    paths_2023 = ['20230523', '20230524']
-    paths = paths+paths_2022+paths_2023
-
     if args.write_timeseries:
-        write_timeseries_figs(paths, args)
+        write_timeseries_figs(args)
     if args.investigate:
-        investigate_timeseries(paths, args)
+        investigate_timeseries(args)

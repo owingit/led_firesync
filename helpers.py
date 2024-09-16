@@ -413,6 +413,10 @@ def t_f_conversion(t):
     return (0.186 * (t ** 2) - 11.14 * t + 194.1) / 60
 
 
+def cutoff_2021():
+    return {'300': 0, '400': 0, '500': 0, '600': 14, '700': 8, '770': 10, '850': 10, '1000': 8}
+
+
 def tighten(k):
     if k == '780':
         return '770'
@@ -442,7 +446,7 @@ def tighten(k):
 
 
 def get_offset(p):
-    return (0.76 if p else 0), (0.77 if p else 0), (0.18 if p else 0)
+    return (0.76 if p else 0), (0.79 if p else 0), (0.18 if p else 0)
 
 
 def epsilon_closeness(lists, k, epsilon):

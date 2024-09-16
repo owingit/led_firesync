@@ -1,5 +1,6 @@
 import itertools
 import pickle
+import scipy
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -25,7 +26,6 @@ def boxplots(all_befores, all_afters, plot_params):
 
     df = pd.concat(frames, keys=user_ids)
     df = df.T
-    # Melt the DataFrame to long format for Seaborn
     df_melted = df.stack(level=[0, 1]).reset_index()
     df_melted.columns = ['Index', 'Key', 'State', 'Values']
 
@@ -33,13 +33,11 @@ def boxplots(all_befores, all_afters, plot_params):
                       linestyle='none')
     colors = plt.cm.Spectral(np.linspace(0, 1, 24))  # Spectral colormap with 8 colors
 
-    alphas = [0.6, 0.9]  # Alpha values for 'State1' and 'State2'
-    # Create the boxplot
+    alphas = [0.6, 0.9]
     plt.figure(figsize=(12, 6))
     sns.boxplot(x='Key', y='Values', hue='State', data=df_melted, showfliers=False, hue_order=['before', 'induced'])
     plt.title('Firefly periods prior to and following LED introduction')
 
-    # Add connecting lines and significance annotations
     for i, key in enumerate(sorted(data.keys(), key=lambda x: int(x))):
         key = int(key)
         state1_values = df_melted[(df_melted['Key'] == key) & (df_melted['State'] == 'before')]['Values']
@@ -52,19 +50,16 @@ def boxplots(all_befores, all_afters, plot_params):
             q1_state2, q3_state2 = np.percentile(state2_values, [25, 75])
             iqr_state1, iqr_state2 = q3_state1 - q1_state1, q3_state2 - q1_state2
 
-            # Calculate whiskers for each state
             upper_whisker_state1 = q3_state1 + 1.5 * iqr_state1
             upper_whisker_state2 = q3_state2 + 1.5 * iqr_state2
             plt.text(i, max(upper_whisker_state1, upper_whisker_state2), '*', ha='center', fontsize=12)
         colors_extended = [color for color in colors[::3] for _ in range(2)]
-        # Adjust the alpha for each box individually
         for patch, color in zip(plt.gca().artists, colors_extended):
             patch.set_color(color)
         alpha_cycle = itertools.cycle(alphas)
         for patch in plt.gca().artists:
             patch.set_alpha(next(alpha_cycle))
 
-    # Divide each key by 1000 on the x-axis
     plt.gca().set_xticklabels([f'{int(key) / 1000:.3f}' for key in data.keys()])
 
     plt.ylabel('Firefly period (s)')
@@ -74,7 +69,7 @@ def boxplots(all_befores, all_afters, plot_params):
     plt.gca().spines['right'].set_visible(False)
 
     plt.legend([], [], bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.savefig(plot_params.save_folder + '/boxplots_20240607.png')
+    plt.savefig(plot_params.save_folder + '/boxplots.png')
 
 
 def before_vs_mode_freq(rmses, plot_params):
@@ -135,11 +130,8 @@ def barbell_modes(rmses, plot_params):
     plt.close()
 
 
-def plot_statistics(rmses, ks, plot_params):
-    colormap = cm.get_cmap('Spectral', len(ks) * 3)
-    epsilons = np.arange(0.0, 1.0, 0.01)
-    fig, axes = plt.subplots(len(ks), figsize=(8,6))
 
+def plot_statistics(rmses, ks, plot_params):
     all_befores = {}
     all_afters = {}
 
@@ -155,8 +147,6 @@ def plot_statistics(rmses, ks, plot_params):
                 period_changes = [i[1] for i in individual]
                 all_delays.extend(delays)
                 all_responses.extend(period_changes)
-                # except TypeError:
-                #     all_delays.append(individual[0])
 
             axes[i].spines['top'].set_visible(False)
             axes[i].spines['right'].set_visible(False)
@@ -165,28 +155,6 @@ def plot_statistics(rmses, ks, plot_params):
             else:
                 color = colormap.__call__(i * 3)
             axes[i].scatter(all_delays, all_responses, color=color)
-                            #density=True, bins=np.arange(-0.5, 0.5, 0.036), color=color)
-
-            if i != len(ks) - 1:
-                axes[i].xaxis.set_visible(False)
-            axes[i].set_xlim(-0.5, 0.5)
-            axes[i].set_ylim(0.0, 5.0)
-        axes[int(len(ks) / 2)].set_ylabel('pdf')
-        plt.savefig(plot_params.save_folder + '/delay_distributions_20240607')
-        plt.close(fig)
-
-        fig, axes = plt.subplots(8)
-        for i, k in enumerate(ks):
-            all_delays = []
-            for individual in rmses['led_ff_diffs'][k]:
-                try:
-                    all_delays.extend(individual)
-                except TypeError:
-                    all_delays.append(individual)
-
-            axes[i].spines['top'].set_visible(False)
-            axes[i].spines['right'].set_visible(False)
-            axes[i].hist(all_delays, density=True, bins=np.arange(-0.5, 0.5, 0.03), color=colormap.__call__(i * 3))
 
             if i != len(ks) - 1:
                 axes[i].xaxis.set_visible(False)
@@ -195,25 +163,31 @@ def plot_statistics(rmses, ks, plot_params):
         axes[int(len(ks) / 2)].set_ylabel('pdf')
         plt.savefig(plot_params.save_folder + '/delay_distributions')
         plt.close(fig)
+
         fig, axes = plt.subplots(8)
         for i, k in enumerate(ks):
             all_delays = []
-            for individual in rmses['ff_led_diffs'][k]:
+            for individual in rmses['led_ff_diffs'][k]:
+                delays = [i[0] for i in individual]
                 try:
-                    all_delays.extend(individual)
+                    all_delays.extend(delays)
                 except TypeError:
-                    all_delays.append(individual)
+                    all_delays.append(delays)
 
             axes[i].spines['top'].set_visible(False)
             axes[i].spines['right'].set_visible(False)
-            axes[i].hist(all_delays, density=True, bins=np.arange(-0.5, 0.5, 0.03), color=colormap.__call__(i * 3))
+            if i == 4:
+                color = 'yellow'
+            else:
+                color = colormap.__call__(i * 3)
+            axes[i].hist(all_delays, density=True, bins=np.arange(-0.5, 0.5, 0.03), color=color)
 
             if i != len(ks) - 1:
                 axes[i].xaxis.set_visible(False)
             axes[i].set_xlim(-0.5, 0.5)
             axes[i].set_ylim(0.0, 5.0)
         axes[int(len(ks) / 2)].set_ylabel('pdf')
-        plt.savefig(plot_params.save_folder + '/delay_distributions_relative_to_ff')
+        plt.savefig(plot_params.save_folder + '/delay_distributions_hist')
         plt.close(fig)
 
     if plot_params.do_windowed_period_plot:
@@ -266,14 +240,14 @@ def plot_statistics(rmses, ks, plot_params):
         axes[len(ks)-1].set_xlabel('T[s]')
         axes[int(len(ks) / 2)].set_ylabel('pdf')
         if plot_params.save_data:
-            with open('all_befores_from_experiments_20240607.pickle', 'wb') as handle:
+            with open(plot_params.save_folder+'all_befores_from_experiments.pickle', 'wb') as handle:
                 pickle.dump(all_befores, handle, protocol=pickle.HIGHEST_PROTOCOL)
-            with open('all_afters_from_experiments_20240607.pickle', 'wb') as handle:
+            with open(plot_params.save_folder+'all_afters_from_experiments.pickle', 'wb') as handle:
                 pickle.dump(all_afters, handle, protocol=pickle.HIGHEST_PROTOCOL)
         plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_2024_beforeafter')
         plt.close(fig)
         if plot_params.do_boxplots:
-            plotting_helpers.boxplots(all_befores, all_afters, plot_params)
+            boxplots(all_befores, all_afters, plot_params)
 
         fig, axes = plt.subplots(8)
         for i, k in enumerate(ks):
@@ -354,7 +328,7 @@ def plot_statistics(rmses, ks, plot_params):
             axes[i].set_ylim(0.0, 6.0)
         axes[len(ks) - 1].set_xlabel('T[s]')
         axes[int(len(ks) / 2)].set_ylabel('pdf')
-        plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_2024_after_20240607')
+        plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_2024_after')
         plt.close(fig)
 
         fig, axes = plt.subplots(len(ks), figsize=(8, 6))
@@ -434,13 +408,11 @@ def plot_statistics(rmses, ks, plot_params):
             plt.close(fig)
 
     if plot_params.do_period_over_time:
-
         for i, k in enumerate(ks):
             fig, axes = plt.subplots()
             axes.spines['top'].set_visible(False)
             axes.spines['right'].set_visible(False)
 
-            colormap = cm.get_cmap('gist_gray', len(rmses['windowed_period_after'][k]) * 2)
             colormap_1 = cm.get_cmap('winter', len(rmses['windowed_period_after'][k]) * 2)
             for q, j in enumerate(range(len(rmses['windowed_period_after'][k]))):
                 try:
@@ -453,7 +425,7 @@ def plot_statistics(rmses, ks, plot_params):
             axes.set_xlabel('Flash instance')
             axes.set_ylabel('Period + firefly instance')
             plt.title('LED freq ' + k + 'ms')
-            plt.savefig(plot_params.save_folder + '/period_lines_over_time_{}_20240607'.format(k))
+            plt.savefig(plot_params.save_folder + '/period_lines_over_time_{}'.format(k))
             plt.close(fig)
 
     if plot_params.do_scatter_overall_stats:
@@ -464,8 +436,6 @@ def plot_statistics(rmses, ks, plot_params):
         means_a = [np.mean([scipy.stats.mode(y)[0] for y in rmses['all_periods_after'][k]]) for k in ks]
         vars_b = [np.mean([np.var(y) for y in rmses['all_periods_before'][k]]) for k in ks]
         vars_a = [np.mean([np.var(y) for y in rmses['all_periods_after'][k]]) for k in ks]
-        vars_b_wo_outliers = [np.mean([np.var(y) for y in rmses['all_periods_before_wo_outliers'][k]]) for k in ks]
-        vars_a_wo_outliers = [np.mean([np.var(y) for y in rmses['all_periods_after_wo_outliers'][k]]) for k in ks]
         ax.scatter(ks_hz, means_b, color='deepskyblue', label='Mean period before LED introduced')
         ax.scatter(ks_hz, means_a, color='darkcyan', label='Mean period after LED introduced')
         ax.scatter(ks_hz, vars_b, color='orangered', label='Var of period before LED introduced')
