@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from temp_data import temp_dict
+
 
 def find_time_delays(time_series_led, time_series_ff, window_length):
     # Function to find the time delay
@@ -92,6 +94,13 @@ def get_introduced_time(k, instance):
         else:
             led_introduced = 30
         return led_introduced
+
+
+def get_temp_from_experiment_date(date, index):
+    key = date + '_' + index
+    temp = temp_dict.temp_dict[key]
+
+    return temp
 
 
 def get_temperature_2022(led_freq, j, cutoff_j):

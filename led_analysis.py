@@ -488,7 +488,7 @@ def write_timeseries_figs(pargs):
                   }
             data = csv.reader(data_file)
             data_list = list(data)
-
+            temp = helpers.get_temp_from_experiment_date(date, index)
             for line in data_list[1:]:
                 try:
                     ts['ff'].append(line[0])
@@ -501,7 +501,7 @@ def write_timeseries_figs(pargs):
             masked_ff = ff_ys > 0.01
 
             led_xs = np.array([float(eval(x)[0]) for x in ts['led']])
-            led_ys = np.array([0.5 if float(eval(x)[1]) == 1.0 else 0.53 for x in ts['led']])
+            led_ys = np.array([0.5 if float(eval(x)[1]) == 1.0 else 0.502 for x in ts['led']])
             masked_led = led_ys > 0.50
 
             fig = make_subplots(
@@ -511,28 +511,43 @@ def write_timeseries_figs(pargs):
             )
 
             fig.add_trace(
-                go.Scatter(x=led_xs[masked_led], y=led_ys[masked_led], mode='markers', name='LED', marker=dict(color='orange')),
+                go.Scatter(x=led_xs[masked_led], y=led_ys[masked_led], mode='markers', name='LED',
+                           marker=dict(color='orange')),
                 row=1, col=1
             )
             fig.add_trace(
-                go.Bar(x=led_xs[masked_led], y=led_ys[masked_led], name='LED', marker=dict(color='orange')),
+                go.Bar(x=led_xs[masked_led], y=led_ys[masked_led] - 0.5, name='LED',
+                       marker=dict(color='orange'), base=0.5),
+                row=1, col=1,
+            )
+            fig.add_trace(
+                go.Scatter(x=ff_xs[masked_ff], y=ff_ys[masked_ff], name='FF', mode='markers',
+                           marker=dict(color='green')),
                 row=1, col=1
             )
             fig.add_trace(
-                go.Scatter(x=ff_xs[masked_ff], y=ff_ys[masked_ff], name='FF', mode='markers', marker=dict(color='green')),
+                go.Bar(x=ff_xs[masked_ff], y=ff_ys[masked_ff] - 0.498, name='FF',
+                       marker=dict(color='green'), base=0.498),
                 row=1, col=1
             )
-            fig.add_trace(
-                go.Bar(x=ff_xs[masked_ff], y=ff_ys[masked_ff], name='FF', marker=dict(color='green')),
-                row=1, col=1
-            )
-
+            if date[0] == '0':
+                date = date[-4:] + date[:-4]
             fig.update_layout(
                 height=600,
                 showlegend=True,
-                barmode='overlay'
+                barmode='overlay',
+                title={
+                    'y': 0.95,
+                    'x': 0.5,
+                    'text': "LED+FF Timeseries<br>Date: {}-{}-{}<br>LED Frequency: {}<br>Temperature: {}°C".format(
+                        date[0:4], date[4:6], date[6:8],
+                        key, temp),
+                    'xanchor': 'center',
+                    'yanchor': 'top',
+                },
+                margin={'t': 100},
             )
-            fig.update_yaxes(range=[0.2, 0.8], row=1, col=1)
+            fig.update_yaxes(range=[0.494, 0.506], row=1, col=1)
             fig.update_xaxes(matches='x')
             fig.update_yaxes(matches='y1')
             fig.write_html(pargs.save_folder + '/timeseries/{}_{}_{}.html'.format(
