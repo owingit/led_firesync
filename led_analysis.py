@@ -11,7 +11,7 @@ import helpers
 import plotting_helpers
 
 
-def calculate_statistics(d, key, instance, temperatures, pargs):
+def calculate_statistics(d, key, instance, pargs):
     for arg_name, arg_value in vars(pargs).items():
         if arg_name not in ['save_folder', 'p', 'investigate', 'window_size_seconds']:
             if arg_value:  # Check if the argument is True
@@ -19,11 +19,6 @@ def calculate_statistics(d, key, instance, temperatures, pargs):
     # flash timing limits
     min_cutoff = 0.166
     max_cutoff = 3.0
-
-    if temperatures is not None:
-        temperatures_before = temperatures[instance % len(temperatures)],
-    else:
-        temperatures_before = np.nan
 
     # window size (events)
     min_flashes_in_window = 3
@@ -271,7 +266,6 @@ def calculate_statistics(d, key, instance, temperatures, pargs):
             'led_ff_diffs': [x for x in time_delays[1]],
             'ff_led_diffs': ff_led_diffs,
             'all_periods_before': all_periods_before if len(all_periods_before) > 0 else np.nan,
-            'temperatures_before': temperatures_before,
             'all_periods_after': all_periods_after if len(all_periods_after) > 0 else np.nan,
             'all_periods_before_wo_outliers': all_periods_before_wo_outliers if len(all_periods_before_wo_outliers) > 0 else np.nan,
             'all_periods_after_wo_outliers': all_periods_after_wo_outliers if len(all_periods_after_wo_outliers) > 0 else np.nan
@@ -322,7 +316,6 @@ def sliding_window_stats(d, pargs):
              'immediate_inhibition': dict.fromkeys(ks, None),
              'first_flash_synchrony': dict.fromkeys(ks, None),
              'all_periods_before': dict.fromkeys(ks, None),
-             'temperatures_before': dict.fromkeys(ks, None),
              'all_periods_after': dict.fromkeys(ks, None),
              'all_periods_before_wo_outliers': dict.fromkeys(ks, None),
              'all_periods_after_wo_outliers': dict.fromkeys(ks, None),
@@ -356,15 +349,8 @@ def sliding_window_stats(d, pargs):
     for k in ks:
         for j in range(len(list(d[k]))):
             # not doing anything with temperature right now
-            if pargs.do_temperatures:
-                if j < cutoff_2021[k]:
-                    temperatures = helpers.get_temperature_2021(k, j)
-                else:
-                    temperatures = helpers.get_temperature_2022(k, j, cutoff_2021[k])
-            else:
-                temperatures = None
-            rmse = calculate_statistics(d, k, j, temperatures,
-                                        pargs)
+
+            rmse = calculate_statistics(d, k, j, pargs)
 
             # Aggregate each trial by key
             for stat_key in rmses.keys():
@@ -373,11 +359,6 @@ def sliding_window_stats(d, pargs):
                         rmses[stat_key][k] = [s for s in rmse[stat_key] if not np.isnan(s)]
                     else:
                         rmses[stat_key][k].extend([s for s in rmse[stat_key] if not np.isnan(s)])
-                elif stat_key == 'temperatures_before':
-                    if not rmses[stat_key].get(k):
-                        rmses[stat_key][k] = [rmse[stat_key]]
-                    else:
-                        rmses[stat_key][k].append(rmse[stat_key])
 
                 elif stat_key == 'individual_before' \
                         or stat_key == 'individual_after' \
@@ -489,6 +470,8 @@ def write_timeseries_figs(pargs):
             data = csv.reader(data_file)
             data_list = list(data)
             temp = helpers.get_temp_from_experiment_date(date, index)
+            if date[0] == '0':
+                date = date[-4:] + date[:-4]
             for line in data_list[1:]:
                 try:
                     ts['ff'].append(line[0])
@@ -496,6 +479,7 @@ def write_timeseries_figs(pargs):
                 except IndexError:
                     print('Error loading data with {}'.format(fp))
 
+            # Arrange the two sequences near each other for easy visibility
             ff_xs = np.array([float(eval(x)[0]) for x in ts['ff']])
             ff_ys = np.array([0.0 if float(eval(x)[1]) == 0.0 else 0.5 for x in ts['ff']])
             masked_ff = ff_ys > 0.01
@@ -505,11 +489,12 @@ def write_timeseries_figs(pargs):
             masked_led = led_ys > 0.50
 
             fig = make_subplots(
-                rows=1, cols=1,  # 2 rows, 1 column
-                shared_xaxes=True,  # Share the x-axis between subplots
+                rows=1, cols=1,
+                shared_xaxes=True,
                 vertical_spacing=0
             )
 
+            # Plot led
             fig.add_trace(
                 go.Scatter(x=led_xs[masked_led], y=led_ys[masked_led], mode='markers', name='LED',
                            marker=dict(color='orange')),
@@ -520,6 +505,8 @@ def write_timeseries_figs(pargs):
                        marker=dict(color='orange'), base=0.5),
                 row=1, col=1,
             )
+
+            # Plot firefly
             fig.add_trace(
                 go.Scatter(x=ff_xs[masked_ff], y=ff_ys[masked_ff], name='FF', mode='markers',
                            marker=dict(color='green')),
@@ -530,8 +517,7 @@ def write_timeseries_figs(pargs):
                        marker=dict(color='green'), base=0.498),
                 row=1, col=1
             )
-            if date[0] == '0':
-                date = date[-4:] + date[:-4]
+
             fig.update_layout(
                 height=600,
                 showlegend=True,
@@ -611,7 +597,6 @@ if __name__ == '__main__':
                         help='Whether to plot period over time values per trial')
     parser.add_argument('--do_scatter_overall_stats', action='store_true', help='Whether to scatter @ aggregate-level')
     parser.add_argument('--do_means', action='store_true', help='Whether to bother with mean of means comparisons')
-    parser.add_argument('--do_temperatures', action='store_true', help='Whether to bother with temperatures')
     parser.add_argument('--do_cc', action='store_true', help='Whether to bother trying connected component analysis')
     parser.add_argument('--window_size_seconds', type=int, default=5, help='Window size, in seconds, for ts analysis')
     parser.add_argument('--p', action='store_true', help='Whether to correct for bkgrd stack offset')
