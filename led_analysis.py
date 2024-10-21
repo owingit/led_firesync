@@ -522,6 +522,7 @@ def write_timeseries_figs(pargs):
                 height=600,
                 showlegend=True,
                 barmode='overlay',
+                xaxis_title="T [s]", yaxis_visible=False,
                 title={
                     'y': 0.95,
                     'x': 0.5,
@@ -536,8 +537,8 @@ def write_timeseries_figs(pargs):
             fig.update_yaxes(range=[0.494, 0.506], row=1, col=1)
             fig.update_xaxes(matches='x')
             fig.update_yaxes(matches='y1')
-            fig.write_html(pargs.save_folder + '/timeseries/{}_{}_{}.html'.format(
-                date, key, index)
+            fig.write_html(pargs.save_folder + '/timeseries/LED_Period={}ms/{}_{}_{}.html'.format(
+                key, date, key, index)
             )
 
 
