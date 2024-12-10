@@ -4,49 +4,61 @@ import pandas as pd
 from temp_data import temp_dict
 
 
+def improved_circular_normalize(delays, led_period):
+    """
+    Improved circular normalization using known LED period
+
+    Parameters:
+    - delays: Time delays between firefly and LED flashes
+    - led_period: Known period of LED flashes
+
+    Returns:
+    Normalized delays in the range [-0.5, 0.5]
+    """
+    # Normalize using the known LED period
+    normalized_delays = (delays % led_period) / led_period
+
+    # Shift to [-0.5, 0.5] range
+    normalized_delays = np.where(
+        normalized_delays > 0.5,
+        normalized_delays - 1.0,
+        normalized_delays
+    )
+
+    return normalized_delays
+
+
 def find_time_delays(time_series_led, time_series_ff, window_length):
-    # Function to find the time delay
-    delays = []
-    prc = []
-    time_series_led = np.array(time_series_led)
-    time_series_ff = np.array(time_series_ff)
+    led_times_array = np.array(time_series_led)
+    firefly_times_array = np.array(time_series_ff)
 
-    for i, time_led in enumerate(time_series_led):
-        # Define the window for the current time point in A
-        window_start = time_led - window_length / 2
-        window_end = time_led + window_length / 2
+    closest_delays = []
+    period_change_data = []
 
-        # Find points in time series B within the window
-        points_in_window_indices = np.where((time_series_ff >= window_start) & (time_series_ff <= window_end))[0]
-        points_in_window = time_series_ff[points_in_window_indices]
+    led_period = np.median(np.diff(time_series_led)[np.diff(time_series_led) > 0.1])
+    if not led_period:
+        return [], []
 
-        # Check if the window contains at least 3 points from time series B
-        if len(points_in_window) >= 3:
-            time_delays = points_in_window - time_led
-            min_index = np.argmin(np.abs(time_delays))
-            nearest_delay = time_delays[min_index]
-            try:
-                period_change = np.diff(points_in_window)[1] - np.diff(points_in_window)[0]
-            except IndexError:
-                continue  # will pick up next window
+    for i, firefly_time in enumerate(firefly_times_array):
+        window_mask = (firefly_times_array >= firefly_time - window_length / 2) & \
+                      (firefly_times_array <= firefly_time + window_length / 2)
 
-            # Normalize the delay
-            if 0 < i < len(time_series_led) - 2:
-                prev_led = time_series_led[i - 1]
-                next_led = time_series_led[i + 2]
-                norm_delay = (nearest_delay / (next_led - prev_led)) * 2  # Scale to -0.5 to 0.5
-            elif i == 0:
-                next_led = time_series_led[i + 1]
-                norm_delay = nearest_delay / (next_led - time_led) - 0.5
-            else:
-                prev_led = time_series_led[i - 1]
-                norm_delay = (nearest_delay / (time_led - prev_led)) + 0.5
+        if np.sum(window_mask) >= 3:
+            closest_led_index = np.argmin(np.abs(led_times_array - firefly_time))
 
-            if abs(norm_delay) <= 0.5:
-                delays.append(norm_delay)
-                prc.append((norm_delay, period_change))
+            raw_delay = led_times_array[closest_led_index] - firefly_time
 
-    return delays, prc
+            normalized_delay = float(improved_circular_normalize(raw_delay, led_period))
+            closest_delays.append(normalized_delay)
+
+            if i >= 2:
+                period1 = firefly_times_array[i - 1] - firefly_times_array[i - 2]
+                period2 = firefly_times_array[i] - firefly_times_array[i - 1]
+
+                period_change = period2 - period1
+                period_change_data.append((normalized_delay, period_change))
+
+    return closest_delays, period_change_data
 
 
 def get_starts_of_flashes(ff_xs, ff_ys):
@@ -136,7 +148,7 @@ def tighten(k):
 
 
 def get_offset(p):
-    return (0.76 if p else 0), (0.79 if p else 0), (0.18 if p else 0)
+    return (0.56 if p else 0), (0.79 if p else 0), (0.08 if p else 0)
 
 
 def epsilon_closeness(lists, k, epsilon):
@@ -169,9 +181,6 @@ def adjust_for_offset(k1, k2, l1, l2, tp):
         l1 = [x if (x < omb or x > omb_) else x - offset for x in l1]
         l2 = [x if (x < omb or x > omb_) else x - offset for x in l2]
 
-    elif k2:
-        l1 = [x - (offset/3) for x in l1]
-        l2 = [x - (offset/3) for x in l2]
     return l1, l2
 
 

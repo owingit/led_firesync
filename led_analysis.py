@@ -13,7 +13,7 @@ import plotting_helpers
 
 def calculate_statistics(d, key, instance, pargs):
     for arg_name, arg_value in vars(pargs).items():
-        if arg_name not in ['save_folder', 'p', 'investigate', 'window_size_seconds']:
+        if arg_name not in ['save_folder', 'p', 'investigate', 'window_size_seconds', 'data_path', 'save_data']:
             if arg_value:  # Check if the argument is True
                 print('Calculating statistics for {} instance {} of freq {}'.format(arg_name, instance, key))
     # flash timing limits
@@ -345,7 +345,6 @@ def sliding_window_stats(d, pargs):
     else:
         rmse_means = None
 
-    cutoff_2021 = helpers.cutoff_2021()
     for k in ks:
         for j in range(len(list(d[k]))):
             # not doing anything with temperature right now
@@ -453,17 +452,20 @@ def write_timeseries_figs(pargs):
     #
     fpaths = os.listdir(pargs.data_path)
     for fp in fpaths:
-        try:
-            date = fp.split('_')[0]
-            key = fp.split('_')[1]
-            index = fp.split('_')[2].split('.')[0]
-        except IndexError:
+        if 'DS_Store' not in fp:
+            path, framerate = plotting_helpers.check_frame_rate(pargs.data_path + '/' + fp)
+            if path is None:
+                continue
+
+            date = path.split('_')[1].split('/')[1]
+            key = path.split('_')[2]
+            index = path.split('_')[3].split('.')[0]
+        else:
             print('Ignoring {}'.format(fp))
             continue
         if pargs.log:
             print('Writing timeseries from {} with led freq {}'.format(date, key))
-
-        with open(pargs.data_path + '/' + fp, 'r') as data_file:
+        with open(path, 'r') as data_file:
             ts = {'ff': [],
                   'led': []
                   }
@@ -521,14 +523,13 @@ def write_timeseries_figs(pargs):
             fig.update_layout(
                 height=600,
                 showlegend=True,
-                barmode='overlay',
                 xaxis_title="T [s]", yaxis_visible=False,
                 title={
                     'y': 0.95,
                     'x': 0.5,
-                    'text': "LED+FF Timeseries<br>Date: {}-{}-{}<br>LED Frequency: {}<br>Temperature: {}°C".format(
+                    'text': "LED+FF<br>Date: {}-{}-{}<br>LED Period: {}<br>Temp: {}°C<br>Frame Rate: {} fps".format(
                         date[0:4], date[4:6], date[6:8],
-                        key, temp),
+                        key, temp, round((1 / framerate), 3)),
                     'xanchor': 'center',
                     'yanchor': 'top',
                 },
@@ -537,7 +538,7 @@ def write_timeseries_figs(pargs):
             fig.update_yaxes(range=[0.494, 0.506], row=1, col=1)
             fig.update_xaxes(matches='x')
             fig.update_yaxes(matches='y1')
-            fig.write_html(pargs.save_folder + '/timeseries/LED_Period={}ms/{}_{}_{}.html'.format(
+            fig.write_html(pargs.save_folder + '/timeseries/LED_Period={}ms/{}_{}_{}__.html'.format(
                 key, date, key, index)
             )
 
@@ -556,12 +557,13 @@ def investigate_timeseries(pargs):
     ks = list(final_dict.keys())
     fpaths = os.listdir(pargs.data_path)
     for path in fpaths:
-        d = aggregate_timeseries(path, pargs)
-        for key in d:
-            if final_dict.get(key):
-                final_dict[key].extend(d[key])
-            else:
-                final_dict[key] = d[key]
+        if 'DS_Store' not in path and not os.path.isdir(pargs.data_path + '/' + path):
+            d = aggregate_timeseries(path, pargs)
+            for key in d:
+                if final_dict.get(key):
+                    final_dict[key].extend(d[key])
+                else:
+                    final_dict[key] = d[key]
 
     timeseries_stats, _ = sliding_window_stats(final_dict, pargs)
     plotting_helpers.plot_statistics(timeseries_stats, ks, pargs)

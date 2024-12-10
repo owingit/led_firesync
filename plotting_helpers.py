@@ -44,15 +44,24 @@ def boxplots(all_befores, all_afters, plot_params):
         state2_values = df_melted[(df_melted['Key'] == key) & (df_melted['State'] == 'induced')]['Values']
 
         paired_ttest = stats.mannwhitneyu(state1_values, state2_values)
-        print(paired_ttest)
-        if paired_ttest.pvalue < 0.05:
-            q1_state1, q3_state1 = np.percentile(state1_values, [25, 75])
-            q1_state2, q3_state2 = np.percentile(state2_values, [25, 75])
-            iqr_state1, iqr_state2 = q3_state1 - q1_state1, q3_state2 - q1_state2
+        var1 = np.var(state1_values, ddof=1)
+        var2 = np.var(state2_values, ddof=1)
 
-            upper_whisker_state1 = q3_state1 + 1.5 * iqr_state1
-            upper_whisker_state2 = q3_state2 + 1.5 * iqr_state2
-            plt.text(i, max(upper_whisker_state1, upper_whisker_state2), '*', ha='center', fontsize=12)
+        # F-test statistic
+        F = var1 / var2 if var1 > var2 else var2 / var1
+        dof1 = len(state1_values) - 1
+        dof2 = len(state2_values) - 1
+        paired_ftest_pvalue = 2 * (1 - stats.f.cdf(F, dof1, dof2))
+        print(paired_ttest, 'F-test: (', F, ',', paired_ftest_pvalue, ')')
+        if paired_ttest.pvalue < 0.05:
+            if paired_ftest_pvalue < 0.05:
+                q1_state1, q3_state1 = np.percentile(state1_values, [25, 75])
+                q1_state2, q3_state2 = np.percentile(state2_values, [25, 75])
+                iqr_state1, iqr_state2 = q3_state1 - q1_state1, q3_state2 - q1_state2
+
+                upper_whisker_state1 = q3_state1 + 1.5 * iqr_state1
+                upper_whisker_state2 = q3_state2 + 1.5 * iqr_state2
+                plt.text(i, max(upper_whisker_state1, upper_whisker_state2), '*', ha='center', fontsize=12)
         colors_extended = [color for color in colors[::3] for _ in range(2)]
         for patch, color in zip(plt.gca().artists, colors_extended):
             patch.set_color(color)
@@ -64,12 +73,31 @@ def boxplots(all_befores, all_afters, plot_params):
 
     plt.ylabel('Firefly period (s)')
     plt.xlabel('LED period (s)')
-    # Remove top and right spines
     plt.gca().spines['top'].set_visible(False)
     plt.gca().spines['right'].set_visible(False)
 
     plt.legend([], [], bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.savefig(plot_params.save_folder + '/boxplots.png')
+
+
+def check_frame_rate(input_csv):
+    df = pd.read_csv(input_csv)
+    df['LED times'] = df['LED times'].apply(eval)
+    df['FF times'] = df['FF times'].apply(eval)
+
+    df['LED_timestamps'] = df['LED times'].apply(lambda x: x[0])
+    df['LED_states'] = df['LED times'].apply(lambda x: x[1])
+    df['FF_timestamps'] = df['FF times'].apply(lambda x: x[0])
+    df['FF_states'] = df['FF times'].apply(lambda x: x[1])
+
+    frame_rate = df['LED_timestamps'].iloc[1] - df['LED_timestamps'].iloc[0]
+    frame_rate_ff = df['FF_timestamps'].iloc[1] - df['FF_timestamps'].iloc[0]
+    try:
+        assert frame_rate_ff == frame_rate
+        return input_csv, frame_rate
+    except AssertionError:
+        print(f"File {input_csv} frame rate mismatch found, excluding")
+        return None, None
 
 
 def before_vs_mode_freq(rmses, plot_params):
@@ -130,7 +158,6 @@ def barbell_modes(rmses, plot_params):
     plt.close()
 
 
-
 def plot_statistics(rmses, ks, plot_params):
     all_befores = {}
     all_afters = {}
@@ -138,32 +165,6 @@ def plot_statistics(rmses, ks, plot_params):
     colormap = cm.get_cmap('Spectral', len(ks) * 3)
 
     if plot_params.do_delay_plot:
-        fig, axes = plt.subplots(8)
-        for i, k in enumerate(ks):
-            all_delays = []
-            all_responses = []
-            for individual in rmses['led_ff_diffs'][k]:
-                delays = [i[0] for i in individual]
-                period_changes = [i[1] for i in individual]
-                all_delays.extend(delays)
-                all_responses.extend(period_changes)
-
-            axes[i].spines['top'].set_visible(False)
-            axes[i].spines['right'].set_visible(False)
-            if i == 4:
-                color = 'yellow'
-            else:
-                color = colormap.__call__(i * 3)
-            axes[i].scatter(all_delays, all_responses, color=color)
-
-            if i != len(ks) - 1:
-                axes[i].xaxis.set_visible(False)
-            axes[i].set_xlim(-0.5, 0.5)
-            axes[i].set_ylim(0.0, 5.0)
-        axes[int(len(ks) / 2)].set_ylabel('pdf')
-        plt.savefig(plot_params.save_folder + '/delay_distributions')
-        plt.close(fig)
-
         fig, axes = plt.subplots(8)
         for i, k in enumerate(ks):
             all_delays = []
@@ -185,7 +186,7 @@ def plot_statistics(rmses, ks, plot_params):
             if i != len(ks) - 1:
                 axes[i].xaxis.set_visible(False)
             axes[i].set_xlim(-0.5, 0.5)
-            axes[i].set_ylim(0.0, 5.0)
+            axes[i].set_ylim(0.0, 4.0)
         axes[int(len(ks) / 2)].set_ylabel('pdf')
         plt.savefig(plot_params.save_folder + '/delay_distributions_hist')
         plt.close(fig)
@@ -240,9 +241,9 @@ def plot_statistics(rmses, ks, plot_params):
         axes[len(ks)-1].set_xlabel('T[s]')
         axes[int(len(ks) / 2)].set_ylabel('pdf')
         if plot_params.save_data:
-            with open(plot_params.save_folder+'all_befores_from_experiments.pickle', 'wb') as handle:
+            with open(plot_params.save_folder+'/all_befores_from_experiments.pickle', 'wb') as handle:
                 pickle.dump(all_befores, handle, protocol=pickle.HIGHEST_PROTOCOL)
-            with open(plot_params.save_folder+'all_afters_from_experiments.pickle', 'wb') as handle:
+            with open(plot_params.save_folder+'/all_afters_from_experiments.pickle', 'wb') as handle:
                 pickle.dump(all_afters, handle, protocol=pickle.HIGHEST_PROTOCOL)
         plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_2024_beforeafter')
         plt.close(fig)
@@ -289,6 +290,40 @@ def plot_statistics(rmses, ks, plot_params):
         axes[len(ks) - 1].set_xlabel('T[s]')
         axes[int(len(ks) / 2)].set_ylabel('pdf')
         plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2024_windowed_beforeafter_w_lines')
+        plt.close(fig)
+
+        fig, axes = plt.subplots(8)
+        for i, k in enumerate(ks):
+            all_afters[k] = []
+            for individual in rmses['windowed_period_after'][k]:
+                try:
+                    all_afters[k].extend(individual)
+                except TypeError:
+                    all_afters[k].append(individual)
+            axes[i].spines['top'].set_visible(False)
+            axes[i].spines['right'].set_visible(False)
+            all_afters[k] = [x for x in all_afters[k] if not np.isnan(x)]
+            if i == 4:
+                color = 'yellow'
+            else:
+                color = colormap.__call__(i * 3)
+            axes[i].hist(all_afters[k], density=True, bins=np.arange(0.0, 2.0, 0.03), color=color, alpha=0.75)
+            if i != 0:
+                axes[i].axvline(float(k) / 1000, color='black')
+                axes[i].axvline(0.5 * (float(k) / 1000), color='black', linestyle='--')
+                axes[i].axvline(2.0 * (float(k) / 1000), color='black', linestyle=':')
+            else:
+                axes[i].axvline(float(k) / 1000, color='black', label='LED period')
+                axes[i].axvline(0.5 * (float(k) / 1000), color='black', linestyle='--', label='0.5 * LED period')
+                axes[i].axvline(2.0 * (float(k) / 1000), color='black', linestyle=':', label='2.0 * LED period')
+                axes[i].legend()
+            if i != len(ks) - 1:
+                axes[i].xaxis.set_visible(False)
+            axes[i].set_xlim(0.0, 2.05)
+            axes[i].set_ylim(0.0, 6.0)
+        axes[len(ks) - 1].set_xlabel('T[s]')
+        axes[int(len(ks) / 2)].set_ylabel('pdf')
+        plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2024_windowed_after_w_lines')
         plt.close(fig)
 
         fig, axes = plt.subplots(len(ks), figsize=(8, 6))
