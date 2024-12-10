@@ -452,17 +452,14 @@ def write_timeseries_figs(pargs):
     #
     fpaths = os.listdir(pargs.data_path)
     for fp in fpaths:
-        if 'DS_Store' not in fp:
-            path, framerate = plotting_helpers.check_frame_rate(pargs.data_path + '/' + fp)
-            if path is None:
-                continue
-
-            date = path.split('_')[1].split('/')[1]
-            key = path.split('_')[2]
-            index = path.split('_')[3].split('.')[0]
-        else:
-            print('Ignoring {}'.format(fp))
+        path, framerate = plotting_helpers.check_frame_rate(pargs.data_path + '/' + fp)
+        if path is None:
             continue
+
+        date = path.split('_')[1].split('/')[1]
+        key = path.split('_')[2]
+        index = path.split('_')[3].split('.')[0]
+
         if pargs.log:
             print('Writing timeseries from {} with led freq {}'.format(date, key))
         with open(path, 'r') as data_file:
