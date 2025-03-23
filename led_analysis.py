@@ -3,9 +3,8 @@ import csv
 import os
 
 import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from scipy import stats
+
 
 import helpers
 import plotting_helpers
@@ -64,7 +63,7 @@ def calculate_statistics(d, key, instance, pargs):
                                     for y in np.diff(x)]
     rolling_flash_periods_after = [y for x in rolling_flash_avg_flash_times_after if len(x) >= min_flashes_in_window
                                    for y in np.diff(x)]
-    rolling_flash_periods_after, all_periods_after = helpers.adjust_for_offset(k1, k2, rolling_flash_periods_after,
+    rolling_flash_periods_after, all_periods_after = helpers.adjust_for_offset(k1, rolling_flash_periods_after,
                                                                                all_periods_after, trial_params)
 
     rolling_avg_interflash, flash_times_to_plot, mean_interflashes_before, mean_interflashes_after = helpers.r_means(
@@ -89,6 +88,14 @@ def calculate_statistics(d, key, instance, pargs):
 
     # Find time delays
     time_delays = helpers.find_time_delays(led_xs_flashes, flashes_after, args.window_size_seconds)
+    if args.do_ffrt:
+        phases, phase_shifts, phase_time_difs = helpers.compute_phase_response_curve(
+            led_xs_flashes, flashes_after, 0.033, True
+        )
+    else:
+        phases, phase_shifts, phase_time_difs = helpers.compute_phase_response_curve(
+            led_xs_flashes, flashes_after, 0.033, False
+        )
     led_ff_diffs = []
     for x in led_xs_flashes:
         x_min_diff = 2 * led_f
@@ -234,6 +241,10 @@ def calculate_statistics(d, key, instance, pargs):
     return {'rmse': rmse,
             'rmse_after': rmse_after,
             'rmse_before': rmse_before,
+            'phases': phases,
+            'phase_shifts': phase_shifts,
+            'phase_time_diffs': phase_time_difs,
+            'phase_time_diffs_instanced': {instance: phase_time_difs},
             'flashes_before': flashes_before if len(flashes_before) > 0 else np.nan,
             'flashes_after': flashes_after if len(flashes_after) > 0 else np.nan,
             'windowed_period_before': rolling_flash_periods_before if len(rolling_flash_periods_before) > 0 else np.nan,
@@ -263,7 +274,8 @@ def calculate_statistics(d, key, instance, pargs):
             'median_after': np.median(mean_interflashes_after),
             'immediate_inhibition': immediate_inhibition,
             'first_flash_synchrony': first_flash_synchrony,
-            'led_ff_diffs': [x for x in time_delays[1]],
+            'led_ff_diffs': [x for x in time_delays[0]],
+            'phase_response': [x for x in time_delays[1]],
             'ff_led_diffs': ff_led_diffs,
             'all_periods_before': all_periods_before if len(all_periods_before) > 0 else np.nan,
             'all_periods_after': all_periods_after if len(all_periods_after) > 0 else np.nan,
@@ -284,6 +296,10 @@ def sliding_window_stats(d, pargs):
     rmses = {'rmse': dict.fromkeys(ks, None),
              'rmse_after': dict.fromkeys(ks, None),
              'rmse_before': dict.fromkeys(ks, None),
+             'phases': dict.fromkeys(ks, None),
+             'phase_shifts': dict.fromkeys(ks, None),
+             'phase_time_diffs': dict.fromkeys(ks, None),
+             'phase_time_diffs_instanced': dict.fromkeys(ks, None),
              'flashes_before': dict.fromkeys(ks, None),
              'flashes_after': dict.fromkeys(ks, None),
              'not_squared_before': dict.fromkeys(ks, None),
@@ -298,6 +314,7 @@ def sliding_window_stats(d, pargs):
              'individual_after': dict.fromkeys(ks, None),
              'ff_led_diffs': dict.fromkeys(ks, None),
              'led_ff_diffs': dict.fromkeys(ks, None),
+             'phase_response': dict.fromkeys(ks, None),
              'before': dict.fromkeys(ks, None),
              'after': dict.fromkeys(ks, None),
              'rmses_over_time': dict.fromkeys(ks, None),
@@ -358,7 +375,6 @@ def sliding_window_stats(d, pargs):
                         rmses[stat_key][k] = [s for s in rmse[stat_key] if not np.isnan(s)]
                     else:
                         rmses[stat_key][k].extend([s for s in rmse[stat_key] if not np.isnan(s)])
-
                 elif stat_key == 'individual_before' \
                         or stat_key == 'individual_after' \
                         or stat_key == 'ff_led_diffs' or stat_key == 'led_ff_diffs':
@@ -366,7 +382,11 @@ def sliding_window_stats(d, pargs):
                         rmses[stat_key][k] = [rmse[stat_key]]
                     else:
                         rmses[stat_key][k].append(rmse[stat_key])
-
+                elif stat_key == 'phase_time_diffs_instanced':
+                    if not rmses[stat_key].get(k):
+                        rmses[stat_key][k] = [rmse[stat_key][j]]
+                    else:
+                        rmses[stat_key][k].append(rmse[stat_key][j])
                 elif stat_key == 'rmses_over_time':
                     if not rmses[stat_key].get(k):
                         rmses[stat_key][k] = [rmse[stat_key]]
@@ -445,101 +465,6 @@ def aggregate_timeseries(path, pargs):
     return all_data
 
 
-def write_timeseries_figs(pargs):
-    #
-    # Write the timeseries figures path objects
-    # Interactive timeseries plots for any given day - the raw data
-    #
-    fpaths = os.listdir(pargs.data_path)
-    for fp in fpaths:
-        path, framerate = plotting_helpers.check_frame_rate(pargs.data_path + '/' + fp)
-        if path is None:
-            continue
-
-        date = path.split('_')[1].split('/')[1]
-        key = path.split('_')[2]
-        index = path.split('_')[3].split('.')[0]
-
-        if pargs.log:
-            print('Writing timeseries from {} with led freq {}'.format(date, key))
-        with open(path, 'r') as data_file:
-            ts = {'ff': [],
-                  'led': []
-                  }
-            data = csv.reader(data_file)
-            data_list = list(data)
-            temp = helpers.get_temp_from_experiment_date(date, index)
-            if date[0] == '0':
-                date = date[-4:] + date[:-4]
-            for line in data_list[1:]:
-                try:
-                    ts['ff'].append(line[0])
-                    ts['led'].append(line[1])
-                except IndexError:
-                    print('Error loading data with {}'.format(fp))
-
-            # Arrange the two sequences near each other for easy visibility
-            ff_xs = np.array([float(eval(x)[0]) for x in ts['ff']])
-            ff_ys = np.array([0.0 if float(eval(x)[1]) == 0.0 else 0.5 for x in ts['ff']])
-            masked_ff = ff_ys > 0.01
-
-            led_xs = np.array([float(eval(x)[0]) for x in ts['led']])
-            led_ys = np.array([0.5 if float(eval(x)[1]) == 1.0 else 0.502 for x in ts['led']])
-            masked_led = led_ys > 0.50
-
-            fig = make_subplots(
-                rows=1, cols=1,
-                shared_xaxes=True,
-                vertical_spacing=0
-            )
-
-            # Plot led
-            fig.add_trace(
-                go.Scatter(x=led_xs[masked_led], y=led_ys[masked_led], mode='markers', name='LED',
-                           marker=dict(color='orange')),
-                row=1, col=1
-            )
-            fig.add_trace(
-                go.Bar(x=led_xs[masked_led], y=led_ys[masked_led] - 0.5, name='LED',
-                       marker=dict(color='orange'), base=0.5),
-                row=1, col=1,
-            )
-
-            # Plot firefly
-            fig.add_trace(
-                go.Scatter(x=ff_xs[masked_ff], y=ff_ys[masked_ff], name='FF', mode='markers',
-                           marker=dict(color='green')),
-                row=1, col=1
-            )
-            fig.add_trace(
-                go.Bar(x=ff_xs[masked_ff], y=ff_ys[masked_ff] - 0.498, name='FF',
-                       marker=dict(color='green'), base=0.498),
-                row=1, col=1
-            )
-
-            fig.update_layout(
-                height=600,
-                showlegend=True,
-                xaxis_title="T [s]", yaxis_visible=False,
-                title={
-                    'y': 0.95,
-                    'x': 0.5,
-                    'text': "LED+FF<br>Date: {}-{}-{}<br>LED Period: {}<br>Temp: {}°C<br>Frame Rate: {} fps".format(
-                        date[0:4], date[4:6], date[6:8],
-                        key, temp, round((1 / framerate), 3)),
-                    'xanchor': 'center',
-                    'yanchor': 'top',
-                },
-                margin={'t': 100},
-            )
-            fig.update_yaxes(range=[0.494, 0.506], row=1, col=1)
-            fig.update_xaxes(matches='x')
-            fig.update_yaxes(matches='y1')
-            fig.write_html(pargs.save_folder + '/timeseries/LED_Period={}ms/{}_{}_{}__.html'.format(
-                key, date, key, index)
-            )
-
-
 def investigate_timeseries(pargs):
     final_dict = {
         '300': [],
@@ -584,6 +509,9 @@ if __name__ == '__main__':
 
     parser.add_argument('-i', '--investigate', action='store_true', help='Whether to analyse timeseries')
     parser.add_argument('-w', '--write_timeseries', action='store_true', help='Whether to plot interactive timeseries')
+    parser.add_argument('--with_stats', action='store_true',
+                        help='Whether to write the phase and response time alongside the timeseries')
+    parser.add_argument('--do_ffrt', action='store_true')
 
     parser.add_argument('--do_delay_plot', action='store_true', help='Whether to plot delay plots')
     parser.add_argument('--do_windowed_period_plot', action='store_true', help='Whether to plot period plots')
@@ -595,9 +523,12 @@ if __name__ == '__main__':
     parser.add_argument('--do_recurrence_diagrams', action='store_true', help='Whether to plot recurrence diagrams')
     parser.add_argument('--do_period_over_time', action='store_true',
                         help='Whether to plot period over time values per trial')
+    parser.add_argument('--do_initial_distribution', action='store_true',
+                        help='Whether to plot initial distribution of periods for all sampled fireflies')
     parser.add_argument('--do_scatter_overall_stats', action='store_true', help='Whether to scatter @ aggregate-level')
     parser.add_argument('--do_means', action='store_true', help='Whether to bother with mean of means comparisons')
     parser.add_argument('--do_cc', action='store_true', help='Whether to bother trying connected component analysis')
+    parser.add_argument('--do_prc', action='store_true', help='Whether to bother with phase response curve')
     parser.add_argument('--window_size_seconds', type=int, default=5, help='Window size, in seconds, for ts analysis')
     parser.add_argument('--p', action='store_true', help='Whether to correct for bkgrd stack offset')
     parser.add_argument('--log', action='store_true', help='Whether to log data')
@@ -610,6 +541,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.write_timeseries:
-        write_timeseries_figs(args)
+        plotting_helpers.write_timeseries_figs(args)
     if args.investigate:
         investigate_timeseries(args)
