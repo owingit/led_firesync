@@ -94,6 +94,51 @@ def boxplots(all_befores, all_afters, plot_params):
     plt.savefig(plot_params.save_folder + '/boxplots.png')
 
 
+def plot_dfa_results(scales, fluctuations, alpha, confidence_interval, title="DFA Analysis"):
+    """
+    Plot the results of DFA analysis.
+
+    Parameters:
+    - scales: the scales at which fluctuations were calculated.
+    - fluctuations: the fluctuation values at each scale.
+    - alpha: scaling exponent (slope of log-log plot).
+    - confidence_interval: (lower_bound, upper_bound) of the 95% confidence interval for alpha.
+    - title: Title for the plot.
+
+    Returns:
+    - fig, ax: figure and axis objects for the plot.
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Plot fluctuations versus scale
+    ax.loglog(scales, fluctuations, 'o', markersize=8, label='Fluctuations')
+
+    # Plot the fitted line
+    log_scales = np.log10(scales)
+    log_fluct = np.log10(fluctuations)
+
+    # Perform linear regression for the plot
+    X = add_constant(log_scales)
+    model = OLS(log_fluct, X).fit()
+
+    # Generate predicted values
+    x_line = np.linspace(min(log_scales), max(log_scales), 100)
+    y_line = model.params[0] + model.params[1] * x_line
+
+    # Plot the regression line
+    ax.loglog(10 ** x_line, 10 ** y_line, 'r-',
+              label=f'Fit: α = {alpha:.3f} (95% CI: {confidence_interval[0]:.3f}-{confidence_interval[1]:.3f})')
+
+    ax.set_xlabel('Scale (s)', fontsize=12)
+    ax.set_ylabel('Fluctuation F(s)', fontsize=12)
+    ax.set_title(title, fontsize=14)
+    ax.legend(fontsize=10)
+    ax.grid(True, which="both", ls="-", alpha=0.2)
+
+    return fig, ax
+
+
+
 def check_frame_rate(input_csv):
     df = pd.read_csv(input_csv)
     df['LED times'] = df['LED times'].apply(eval)
