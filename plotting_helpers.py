@@ -1,26 +1,22 @@
-import itertools
-import pickle
-import scipy
-import os
 import csv
+import itertools
+import os
+import pickle
 
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import plotly.graph_objects as go
-import json
 import pandas as pd
-import seaborn as sns
+import plotly.graph_objects as go
 import plotly.io as pio
+import scipy
+import scipy.interpolate
+import seaborn as sns
 from matplotlib import cm
 from plotly.subplots import make_subplots
 from scipy import stats
-from scipy import signal, optimize
 from statsmodels.regression.linear_model import OLS
 from statsmodels.tools import add_constant
-import scipy.interpolate
-from matplotlib.colors import LinearSegmentedColormap, to_rgb
-from scipy.stats import gaussian_kde
 
 import helpers
 
@@ -94,7 +90,44 @@ def boxplots(all_befores, all_afters, plot_params):
     plt.savefig(plot_params.save_folder + '/boxplots.png')
 
 
-def plot_dfa_results(scales, fluctuations, alpha, confidence_interval, title="DFA Analysis"):
+def plot_recurrence(r, ax, method, t, e):
+    """
+    Visualize the recurrence plot.
+
+    Parameters:
+    -----------
+    - r: Binary matrix representing recurrence points
+    - ax: axes on which to plot
+    """
+    if t is not None:
+        title_string = 'Recurrence Plot from {}: Tau = {}, embedding dim = {}'.format(method, t, e)
+    else:
+        title_string = 'Recurrence Plot from {}'.format(method)
+    cax = ax.imshow(r, cmap='binary', origin='lower')
+    ax.set_title(title_string)
+    ax.set_xlabel('Time Index')
+    ax.set_ylabel('Time Index')
+    plt.colorbar(cax, label='Recurrence', ax=ax)
+
+
+def plot_cross_correlation(lags, correlation, ax):
+    """
+    Plot the cross-correlation results.
+
+    Parameters:
+    - lags: Array of lag times
+    - correlation: Cross-correlation values
+    - ax: axes on which to plot
+    """
+    ax.plot(lags, correlation)
+    ax.set_title('Cross-Correlation between LED and FF Event Times')
+    ax.set_xlabel('Lag (ms)')
+    ax.set_ylabel('Normalized Cross-Correlation')
+    ax.axhline(y=0, color='r', linestyle='--')
+    ax.grid(True)
+
+
+def plot_dfa_results(scales, fluctuations, alpha, confidence_interval, hurst_exp, ax):
     """
     Plot the results of DFA analysis.
 
@@ -108,8 +141,6 @@ def plot_dfa_results(scales, fluctuations, alpha, confidence_interval, title="DF
     Returns:
     - fig, ax: figure and axis objects for the plot.
     """
-    fig, ax = plt.subplots(figsize=(10, 6))
-
     # Plot fluctuations versus scale
     ax.loglog(scales, fluctuations, 'o', markersize=8, label='Fluctuations')
 
@@ -124,19 +155,15 @@ def plot_dfa_results(scales, fluctuations, alpha, confidence_interval, title="DF
     # Generate predicted values
     x_line = np.linspace(min(log_scales), max(log_scales), 100)
     y_line = model.params[0] + model.params[1] * x_line
-
     # Plot the regression line
     ax.loglog(10 ** x_line, 10 ** y_line, 'r-',
               label=f'Fit: α = {alpha:.3f} (95% CI: {confidence_interval[0]:.3f}-{confidence_interval[1]:.3f})')
 
     ax.set_xlabel('Scale (s)', fontsize=12)
     ax.set_ylabel('Fluctuation F(s)', fontsize=12)
-    ax.set_title(title, fontsize=14)
+    ax.set_title(f"DFA analysis: Alpha={alpha:.4f},Hurst={hurst_exp:.4f}", fontsize=14)
     ax.legend(fontsize=10)
     ax.grid(True, which="both", ls="-", alpha=0.2)
-
-    return fig, ax
-
 
 
 def check_frame_rate(input_csv):
@@ -217,6 +244,45 @@ def barbell_modes(rmses, plot_params):
     plt.close()
 
 
+def plot_poincare(phases, title):
+    """
+    Create a Poincaré plot of phase differences.
+
+    Parameters:
+    - phases  list of consecutive phase differences
+    - title: figtitle
+    """
+    # Convert to numpy array if not already
+    phase_diff = np.array(phases)
+
+    # Create Poincaré plot
+    plt.figure(figsize=(6, 6))
+    plt.scatter(phase_diff[:-1], phase_diff[1:], alpha=0.5, s=10, color="black")
+    plt.xlabel(r'$\Delta \phi_i$')
+    plt.ylabel(r'$\Delta \phi_{i+1}$')
+    plt.title("Poincaré Plot of Phase Differences")
+    plt.axhline(0, color='gray', linestyle='--', linewidth=0.5)
+    plt.axvline(0, color='gray', linestyle='--', linewidth=0.5)
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.savefig(title)
+    plt.close()
+
+
+def plot_alpha_vs_dist_period(dist_ps, alphas, keys):
+    fig, ax = plt.subplots()
+    xs = dist_ps
+    colormap = cm.get_cmap('Spectral', len(keys))
+    colors = [colormap(i) for i in range(len(keys))]
+
+    ax.scatter(xs, alphas, color=colors, s=5, )
+    ax.set_xlabel('T_{ff} - T_{LED}')
+    ax.set_ylabel('DFA Alpha')
+    ax.set_xlim([-1, 1])
+    ax.set_ylim([0.1, 1.5])
+    plt.savefig('figs/analysis/Alpha_vs_period_diff.png')
+    plt.close()
+
+
 def write_timeseries_figs(pargs):
     #
     # Write the timeseries figures path objects
@@ -258,12 +324,21 @@ def write_timeseries_figs(pargs):
             masked_led = led_ys > 0.50
 
             if pargs.with_stats:
-                _, _, pairs = helpers.compute_phase_response_curve(time_series_led=led_xs_flashes,
-                                                                   time_series_ff=ff_xs_flashes,
-                                                                   epsilon=0.035,  # one frame
-                                                                   do_responses_relative_to_ff=pargs.do_ffrt)
+                _, _, pairs, period = helpers.compute_phase_response_curve(
+                    time_series_led=led_xs_flashes,
+                    time_series_ff=ff_xs_flashes,
+                    epsilon=0.035,  # one frame
+                    do_responses_relative_to_ff=pargs.do_ffrt
+                )
+                if period is None:
+                    ff_period = 'N/A'
+                else:
+                    ff_period = period['period_estimate']
+                    ff_period = f"{ff_period * 1000:.4f}"
 
                 times, phases, responses = zip(*[(t, p, r) for p, r, t in pairs])
+                if pargs.re_norm:
+                    phases = helpers.renorm_phases(phases)
 
                 phase_derivative = helpers.sliding_time_window_derivative(times, phases, window_seconds=3.0)
 
@@ -277,7 +352,7 @@ def write_timeseries_figs(pargs):
                 valid_accelerations = [phase_acceleration[i] for i in valid_indices_2nd]
 
                 date_str = f"{date[0:4]}-{date[4:6]}-{date[6:8]}"
-                title_text = f"<br>LED+FF Experiment<br>Date: {date_str}<br>LED Period: {key}ms<br>Temp: {temp}°C<br>Frame Rate: {round(1 / framerate, 3)} fps<br><br><br><br>"
+                title_text = f"<br>LED+FF Experiment<br>Date: {date_str}<br>LED Period: {key}ms<br>Firefly Period prior to introduction: {ff_period}ms<br>Temp: {temp}°C<br>Frame Rate: {round(1 / framerate, 3)} fps<br><br><br><br>"
                 x_min = min(min(led_xs), min(ff_xs))
                 x_max = max(max(led_xs), max(ff_xs))
 
@@ -300,13 +375,33 @@ def write_timeseries_figs(pargs):
                     marker=dict(color='green', size=5)
                 )
 
-                trace2 = go.Scatter(x=times, y=phases, mode='markers', name='Phase Differences',
-                                    marker=dict(color='black', size=5))
+                trace2 = go.Scatter(
+                    x=times,
+                    y=phases,
+                    mode='markers',
+                    name='Phase Differences',
+                    line=dict(color='black', width=1, dash='solid')
+                )
+
                 trace2_baseline = go.Scatter(x=[x_min, x_max], y=[0, 0], mode='lines',
                                              line=dict(color='blue', dash='dash', width=1), showlegend=False)
-                trace3 = go.Scatter(x=times, y=responses, mode='markers', name='Firefly Period',
-                                    marker=dict(color='red', size=5))
-                trace3_baseline = go.Scatter(x=[x_min, x_max], y=[float(key) / 1000, float(key) / 1000], mode='lines',
+
+                if period:
+                    p_xs = period['periods'][0]
+                    p_ys = period['periods'][1]
+                    xtimes = [*p_xs, *times]
+                    yresponses = [*p_ys, *responses]
+                else:
+                    xtimes = times
+                    yresponses = responses
+                trace3 = go.Scatter(
+                    x=xtimes,
+                    y=yresponses,
+                    mode='markers',
+                    name='Firefly Period',
+                    marker=dict(color='red', size=5),
+                )
+                trace3_baseline = go.Scatter(x=[min(xtimes), x_max], y=[float(key) / 1000, float(key) / 1000], mode='lines',
                                              line=dict(color='blue', dash='dash', width=1), showlegend=False)
                 trace_derivative = go.Scatter(
                     x=valid_times,
@@ -319,7 +414,7 @@ def write_timeseries_figs(pargs):
                     x=valid_times_2nd,
                     y=valid_accelerations,
                     mode='lines',
-                    name='Phase Second Derivative (Acceleration)',
+                    name='Phase Second Derivative ([1/s^2])',
                     line=dict(color='blue', width=2, dash='dash')  # Dashed line for distinction
                 )
                 fig = make_subplots(rows=4, cols=1,
@@ -342,7 +437,7 @@ def write_timeseries_figs(pargs):
                     showlegend=False,
                     xaxis=dict(range=[x_min, x_max]),
                     xaxis2=dict(range=[x_min, x_max]),
-                    xaxis3=dict(range=[x_min, x_max]),
+                    xaxis3=dict(range=[min(xtimes), x_max]),
                     xaxis4=dict(range=[x_min, x_max]),
                     yaxis=dict(
                         title="Signal presence",
@@ -351,9 +446,9 @@ def write_timeseries_figs(pargs):
                         ticktext=['Firefly', 'LED'],
                         range=[0.425, 0.575]
                     ),
-                    yaxis2=dict(title="Phase difference"),
+                    yaxis2=dict(title="Phase difference [s]"),
                     yaxis3=dict(title="Firefly period [s]"),
-                    yaxis4=dict(title="Phase derivative"),
+                    yaxis4=dict(title="Phase derivative [1/s]"),
                     margin=dict(t=180, l=80, r=80, b=80),
                     title={
                         'text': title_text,
@@ -419,9 +514,15 @@ def write_timeseries_figs(pargs):
                                 """
 
                 if pargs.do_ffrt:
-                    output_path = f"{pargs.save_folder}/timeseries/LED_Period={key}ms/{date}_{key}_{index}_phase_ffrt.html"
+                    if not pargs.re_norm:
+                        output_path = f"{pargs.save_folder}/timeseries/LED_Period={key}ms/{date}_{key}_{index}_phase_ffrt.html"
+                    else:
+                        output_path = f"{pargs.save_folder}/timeseries/LED_Period={key}ms/{date}_{key}_{index}_phase_ffrt_0-1.html"
                 else:
-                    output_path = f"{pargs.save_folder}/timeseries/LED_Period={key}ms/{date}_{key}_{index}_phase_rt.html"
+                    if not pargs.re_norm:
+                        output_path = f"{pargs.save_folder}/timeseries/LED_Period={key}ms/{date}_{key}_{index}_phase_rt.html"
+                    else:
+                        output_path = f"{pargs.save_folder}/timeseries/LED_Period={key}ms/{date}_{key}_{index}_phase_rt_0-1.html"
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
                 with open(output_path, 'w') as f:

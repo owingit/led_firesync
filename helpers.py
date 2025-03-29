@@ -1,11 +1,14 @@
-import numpy as np
-from scipy import signal, optimize
+import csv
+import os
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from scipy import signal, optimize, stats
 from statsmodels.regression.linear_model import OLS
 from statsmodels.tools import add_constant
-import scipy.stats as stats
-import pandas as pd
 
+import plotting_helpers
 from temp_data import temp_dict
 
 
@@ -80,6 +83,367 @@ def find_time_delays(time_series_led, time_series_ff, window_length):
     return closest_delays, period_change_data
 
 
+def check_frame_rate(input_csv):
+    df = pd.read_csv(input_csv)
+    df['LED times'] = df['LED times'].apply(eval)
+    df['FF times'] = df['FF times'].apply(eval)
+
+    df['LED_timestamps'] = df['LED times'].apply(lambda x: x[0])
+    df['LED_states'] = df['LED times'].apply(lambda x: x[1])
+    df['FF_timestamps'] = df['FF times'].apply(lambda x: x[0])
+    df['FF_states'] = df['FF times'].apply(lambda x: x[1])
+
+    frame_rate = df['LED_timestamps'].iloc[1] - df['LED_timestamps'].iloc[0]
+    frame_rate_ff = df['FF_timestamps'].iloc[1] - df['FF_timestamps'].iloc[0]
+    try:
+        assert frame_rate_ff == frame_rate
+        return input_csv, frame_rate
+    except AssertionError:
+        print(f"File {input_csv} frame rate mismatch found, excluding")
+        return None, None
+
+
+def renorm_phases(p):
+    """
+    Map phase values from the interval [-0.5, 0.5] to [0.0, 1.0]
+
+    Parameters:
+    - p: list of phases
+
+    Returns:
+    - phase_list_mapped: phases mapped to appropriate range
+    """
+
+    if min(p) < -0.5 or max(p) > 0.5:
+        raise ValueError("Input must be between -0.5 and 0.5")
+
+    phase_list_mapped = []
+    for x in p:
+        if x >= 0:
+            phase_list_mapped.append(x)
+        else:
+            phase_list_mapped.append((x + 1))
+    return phase_list_mapped
+
+def compute_cross_correlation(led_times, ff_times, max_lag_ms=1000, bin_size_ms=1):
+    """
+    Compute cross-correlation between two sets of event times.
+
+    Parameters:
+    - led_times: Array of LED event times
+    - ff_times: Array of FF (responding) event times
+    - max_lag_ms: Maximum lag to compute correlation (in milliseconds)
+    - bin_size_ms: Size of time bins for correlation (in milliseconds)
+
+    Returns:
+    - lags: Array of lag times
+    - correlation: Cross-correlation values
+    """
+    min_time = min(np.min(led_times), np.min(ff_times))
+    max_time = max(np.max(led_times), np.max(ff_times))
+
+    bins = np.arange(min_time, max_time + bin_size_ms, bin_size_ms)
+    led_hist, _ = np.histogram(led_times, bins=bins)
+    ff_hist, _ = np.histogram(ff_times, bins=bins)
+
+    # Compute cross-correlation
+    correlation = signal.correlate(
+        led_hist - np.mean(led_hist),
+        ff_hist - np.mean(ff_hist),
+        mode='full'
+    )
+
+    # Normalize correlation
+    correlation = correlation / (np.std(led_hist) * np.std(ff_hist) * len(led_hist))
+
+    # Generate lags
+    lags = np.linspace(-max_lag_ms / 2, max_lag_ms / 2, len(correlation))
+
+    return lags, correlation
+
+
+def delay_embedding(x, m, tau):
+    """
+    Perform delay coordinate embedding using Takens' theorem
+
+    Parameters:
+    - x: Time series
+    - m: Embedding dimension
+    - tau: Time delay
+
+    Returns:
+    Embedded trajectory matrix
+    """
+    # Ensure enough points for embedding
+    N = len(x)
+    if N < (m - 1) * tau + 1:
+        raise ValueError("Insufficient data points for given embedding parameters")
+
+    # Create embedding matrix
+    X = np.zeros((N - (m - 1) * tau, m))
+    for i in range(m):
+        X[:, i] = x[i * tau: N - (m - 1) * tau + i * tau]
+
+    return X
+
+
+def recurrence_with_embedding(x, m=2, tau=1, epsilon=None, norm='max'):
+    """
+    Compute recurrence plot with sophisticated embedding and distance metrics
+
+    Parameters:
+    - x: Time series
+    - m: Embedding dimension
+    - tau: Time delay
+    - epsilon: Percent of max to be threshold (if None, 5%)
+    - norm: Distance norm ('max', 'euclidean')
+
+    Returns:
+    Distance matrix and threshold
+    """
+    # Embed the time series
+    X = delay_embedding(x, m, tau)
+
+    # Compute pairwise distances
+    if norm == 'max':
+        # Chebyshev (max) norm - common in dynamical systems
+        distances = np.max(np.abs(X[:, np.newaxis, :] - X[np.newaxis, :, :]), axis=-1)
+    elif norm == 'euclidean':
+        # Euclidean norm
+        distances = np.linalg.norm(X[:, np.newaxis, :] - X[np.newaxis, :, :], axis=-1)
+    else:
+        raise ValueError("Unsupported norm type")
+
+    if epsilon is None:
+        # Typical method: 5% of maximum distance
+        thresh = 0.05 * np.max(distances)
+    else:
+        thresh = epsilon * np.max(distances)
+
+    return distances, thresh
+
+
+def false_nearest_neighbors(x, max_dim=10, tau=1, rtol=10, atol=2):
+    """
+    Estimate optimal embedding dimension using False Nearest Neighbors method
+
+    Parameters:
+    - x: Time series
+    - max_dim: Maximum embedding dimension to test
+    - tau: Time delay
+    - rtol: Relative tolerance threshold
+    - atol: Absolute tolerance threshold
+
+    Returns:
+    Optimal embedding dimension and FNN percentages
+    """
+
+    def create_embedding(x, m, tau):
+        """Create time-delay embedding"""
+        N = len(x)
+        if N < (m - 1) * tau + 1:
+            raise ValueError("Insufficient data points for embedding")
+
+        X = np.zeros((N - (m - 1) * tau, m))
+        for i in range(m):
+            X[:, i] = x[i * tau: N - (m - 1) * tau + i * tau]
+        return X
+
+    fnn_percentages = []
+
+    for m in range(1, max_dim + 1):
+        # Create embeddings for current and next dimension
+        X_current = create_embedding(x, m, tau)
+        X_next = create_embedding(x, m + 1, tau)
+
+        dist_current = np.linalg.norm(X_current[:, np.newaxis, :] - X_current[np.newaxis, :, :], axis=-1)
+
+        # Mask the diagonal to ignore self-distances
+        np.fill_diagonal(dist_current, np.inf)
+        nn_indices = np.argmin(dist_current, axis=1)
+
+        # Count false nearest neighbors
+        valid_length = min(len(X_current), len(X_next))
+
+        # Count false nearest neighbors
+        false_nn = 0
+        for i in range(valid_length):
+            nn_idx = nn_indices[i]
+            # Ensure valid nearest neighbor index
+            if nn_idx >= len(X_next):
+                continue  # Skip invalid index
+
+            # Relative and absolute distances in the next dimension
+            rel_dist_next = np.abs(X_next[i, -1] - X_next[nn_idx, -1]) / dist_current[i, nn_idx]
+            abs_dist_next = np.abs(X_next[i, -1] - X_next[nn_idx, -1])
+
+            # Check for false nearest neighbors
+            if (rel_dist_next > rtol) or (abs_dist_next < atol):
+                false_nn += 1
+
+        # Calculate percentage of false nearest neighbors
+        fnn_percentage = false_nn / len(X_current) * 100
+        fnn_percentages.append(fnn_percentage)
+
+        # Typical stopping criterion: below 10% false nearest neighbors
+        if fnn_percentage < 10:
+            break
+
+    return fnn_percentages
+
+
+def estimate_embedding_params(x, max_tau=10):
+    """
+    Estimate embedding dimension and delay using mutual information
+
+    Parameters:
+    - x: Time series
+    - max_tau: Maximum time delay to consider
+
+    Returns:
+    Recommended tau and embedding dimension
+    """
+
+    def mutual_information(x, tau):
+        x1 = x[:-tau]
+        x2 = x[tau:]
+        return np.abs(np.cov(x1, x2)[0, 1])
+
+    mis = [mutual_information(x, tau) for tau in range(1, max_tau + 1)]
+    tau = np.argmin(mis) + 1
+    #fnn_percentages = false_nearest_neighbors(x, max_dim=10, tau=tau)
+    # Find dimension where FNN drops below 10%
+    embed_dim = 2
+
+    return tau, embed_dim
+
+
+def recurrence(ps, method='median'):
+    phases = np.array(ps)
+    distances = np.abs(phases[:, np.newaxis] - phases[np.newaxis, :])
+
+    tau = None
+    embed_dim = None
+    if method == 'median':
+        threshold = np.median(distances)
+    elif method == 'percentage':
+        threshold = 0.05 * np.max(np.abs(phases[:, np.newaxis] - phases[np.newaxis, :]))
+    elif method == 'point_density':
+        threshold = np.percentile(distances, 1)
+    else:
+        tau, embed_dim = estimate_embedding_params(phases, 10)
+        distances, threshold = recurrence_with_embedding(phases, embed_dim, tau)
+    recurrence_matrix = distances <= threshold
+
+    return recurrence_matrix, tau, embed_dim
+
+
+def do_dfa_crosscorrelation_analysis(pargs):
+    fpaths = os.listdir(pargs.data_path)
+    dist_periods = []
+    alphas = []
+    keys = []
+    for fp in fpaths:
+        path, framerate = check_frame_rate(pargs.data_path + '/' + fp)
+        if path is None:
+            continue
+
+        date = path.split('_')[1].split('/')[1]
+        key = path.split('_')[2]
+        index = path.split('_')[3].split('.')[0]
+
+        if pargs.log:
+            print(f'DFA Analysis on timeseries from {date} with led freq {key}')
+        with open(path, 'r') as data_file:
+            ts = {'ff': [], 'led': []}
+            data = list(csv.reader(data_file))
+            if date[0] == '0':
+                date = date[-4:] + date[:-4]
+            for line in data[1:]:
+                try:
+                    ts['ff'].append(line[0])
+                    ts['led'].append(line[1])
+                except IndexError:
+                    print(f'Error loading data with {fp}')
+
+            # Prepare time series data
+            ff_xs = np.array([float(eval(x)[0]) for x in ts['ff']])
+            ff_ys = np.array([0.0 if float(eval(x)[1]) == 0.0 else 0.5 for x in ts['ff']])
+            led_xs = np.array([float(eval(x)[0]) for x in ts['led']])
+            led_ys = np.array([0.5 if float(eval(x)[1]) == 1.0 else 0.502 for x in ts['led']])
+            led_xs_flashes = [x for x, y in zip(led_xs, led_ys) if y == 0.502]
+            ff_xs_flashes = [x for x, y in zip(ff_xs, ff_ys) if y == 0.5]
+
+            _, _, pairs, period = compute_phase_response_curve(time_series_led=led_xs_flashes,
+                                                               time_series_ff=ff_xs_flashes,
+                                                               epsilon=0.035,  # one frame
+                                                               do_responses_relative_to_ff=pargs.do_ffrt)
+
+            times, phases, responses = zip(*[(t, p, r) for p, r, t in pairs])
+            figtitle = 'figs/analysis/DFA_Analysis_and_Cross-Correlation_of_phases_{}_{}_{}.png'.format(date, key, index)
+
+            # NLAnalysis
+            if pargs.re_norm:
+                phases = renorm_phases(phases)
+                figtitle = 'figs/analysis/DFA_Analysis_and_Cross-Correlation_of_phases_0-1_{}_{}_{}.png'.format(date, key, index)
+            scales, fluctuations, alpha, ci = dfa(phases)
+            lags, correlation = compute_cross_correlation(led_xs_flashes, ff_xs_flashes)
+            if period is not None:
+                d = np.median(period['periods'][1]) - (float(key) / 1000)
+            if pargs.log:
+                if alpha is not None:
+                    phase_hurst, _ = whittle_mle(phases)
+                    peak_index = np.argmax(correlation)
+                    peak_lag = lags[peak_index]
+                    peak_correlation = correlation[peak_index]
+                    print(f"DFA, Cross-correlation complete for {date} {key} {index}")
+                    print(f"Alpha: {alpha:.4f}")
+                    print(f"Hurst exp: {phase_hurst:.4f} ")
+                    print(f"Peak Correlation: {peak_correlation:.4f}")
+                    print(f"Peak Lag: {peak_lag:.4f} ms")
+
+            if pargs.do_poincare:
+                pcare_figtitle = 'figs/analysis/Poincare_of_phases_{}_{}_{}.png'.format(date, key, index)
+                if pargs.re_norm:
+                    pcare_figtitle = 'figs/analysis/Poincare_of_phases_0-1_{}_{}_{}.png'.format(date, key, index)
+                plotting_helpers.plot_poincare(phases, pcare_figtitle)
+
+            fig, axes = plt.subplots(2)
+            if alpha is not None:
+                phase_hurst, _ = whittle_mle(phases)
+                plotting_helpers.plot_dfa_results(scales, fluctuations, alpha, ci, phase_hurst, axes[0])
+            else:
+                print(f"DFA, Cross-correlation failed for {date} {key} {index}")
+                plt.close(fig)
+                continue
+            plotting_helpers.plot_cross_correlation(lags, correlation, axes[1])
+            fig.suptitle(f"DFA_Analysis_and_Cross-Correlation_{date}_{key}_{index}")
+            plt.tight_layout()
+            plt.savefig(figtitle)
+            plt.close(fig)
+
+            for method in ['median', 'percentage', 'point_density', 'embedding']:
+                r_currences, t, e = recurrence(phases, method)
+                fig, ax = plt.subplots()
+                plotting_helpers.plot_recurrence(r_currences, ax, method, t, e)
+                figtitle = 'figs/analysis/Recurrence_by_{}thresh_of_phases_{}_{}_{}.png'.format(
+                    method, date, key, index
+                )
+                if pargs.re_norm:
+                    figtitle = 'figs/analysis/Recurrence_by_{}thresh_of_phases_0-1_{}_{}_{}.png'.format(
+                        method, date, key, index
+                    )
+                plt.tight_layout()
+                plt.savefig(figtitle)
+                plt.close(fig)
+            if alpha is not None:
+                if d is not None:
+                    dist_periods.append(d)
+                    alphas.append(alpha)
+                    keys.append(key)
+    return dist_periods, alphas, keys
+
+
 def dfa(time_series, scale_range=None, polynomial_order=2):
     """
     Perform Detrended Fluctuation Analysis on a time series.
@@ -103,8 +467,8 @@ def dfa(time_series, scale_range=None, polynomial_order=2):
     # Determine the scale range if not provided
     N = len(x)
     if scale_range is None:
-        min_scale = 5
-        max_scale = N // 4  # Don't go beyond N/4 for statistical reliability
+        min_scale = 4
+        max_scale = N // 3  # Don't go beyond N/4 for statistical reliability
         scale_range = (min_scale, max_scale)
     else:
         min_scale, max_scale = scale_range
@@ -154,7 +518,10 @@ def dfa(time_series, scale_range=None, polynomial_order=2):
     # Perform linear regression
     X = add_constant(log_scales)
     model = OLS(log_fluctuations, X).fit()
-    alpha = model.params[1]  # Slope
+    try:
+        alpha = model.params[1]  # Slope
+    except IndexError:
+        return None, None, None, None
 
     # Calculate 95% confidence interval
     ci = model.conf_int(alpha=0.05)
@@ -304,6 +671,7 @@ def compute_phase_response_curve(time_series_led, time_series_ff, epsilon=0.04, 
     deduplicated_led_times = dedupe(led_times_array, epsilon)
     deduplicated_ff_times = np.array(deduplicated_ff_times)
     deduplicated_led_times = np.array(deduplicated_led_times)
+    period = detect_period_before_first_led_flash(deduplicated_ff_times, deduplicated_led_times)
 
     if do_responses_relative_to_ff:
         for i in range(1, len(deduplicated_ff_times)):
@@ -342,7 +710,7 @@ def compute_phase_response_curve(time_series_led, time_series_ff, epsilon=0.04, 
 
                 phase_time_diff_pairs.append((phase, response_time, firefly_time))
 
-    return phases, response_times, phase_time_diff_pairs
+    return phases, response_times, phase_time_diff_pairs, period
 
 
 def get_starts_of_flashes(ff_xs, ff_ys):
@@ -563,6 +931,65 @@ def get_rolling_window_flash_times(flash_times_to_include, window_size_seconds):
                 ith_list.append(flash_times_to_include[j])
         rolling_flash_avg_flash_times.append(ith_list)
     return rolling_flash_avg_flash_times
+
+
+def detect_period_before_first_led_flash(ff_xs_flashes, led_xs_flashes):
+    """
+    Detect the period of the ff_xs timeseries before the first LED flash.
+
+    Parameters:
+    -----------
+    ff_xs : array-like
+        Timestamps of the ff timeseries
+    led_xs_flashes : array-like
+        Timestamps of LED flashes
+
+    Returns:
+    --------
+    dict with period estimation details and list of periods used
+    """
+    # Find the first LED flash time
+    first_led_flash = min(led_xs_flashes) if len(led_xs_flashes) > 0 else np.inf
+
+    # Filter ff_xs and ff_ys to only include data before first LED flash
+    pre_flash_xs = [x for x in ff_xs_flashes if x < first_led_flash]
+    pre_flash_xs = np.array(pre_flash_xs)
+    min_cutoff = 0.166
+    all_periods = np.diff(pre_flash_xs)
+    all_periods_valid = [x for x in all_periods if x > min_cutoff]
+    all_periods_valid = np.array(all_periods_valid)
+
+    # If no data before LED flash, return None
+    if len(pre_flash_xs) < 3:
+        return None
+
+    pstats = {
+        'mean': np.mean(all_periods_valid),
+        'median': np.median(all_periods_valid),
+        'std': np.std(all_periods_valid),
+        'min': np.min(all_periods_valid),
+        'max': np.max(all_periods_valid)
+    }
+
+    pstats['coefficient_of_variation'] = pstats['std'] / pstats['mean'] if pstats['mean'] != 0 else np.inf
+
+    # Direct period estimation using median
+    period_estimate = pstats['median']
+
+    # Confidence interval for the period
+    confidence_interval = stats.t.interval(
+        alpha=0.95,  # 95% confidence interval
+        df=len(all_periods_valid) - 1,  # degrees of freedom
+        loc=period_estimate,  # center of interval
+        scale=pstats['std'] / np.sqrt(len(all_periods_valid))  # standard error
+    )
+
+    return {
+        'statistics': pstats,
+        'period_estimate': period_estimate,
+        'period_confidence_interval': confidence_interval,
+        'periods': (pre_flash_xs, all_periods_valid)
+    }
 
 
 def r_means(flashes, led_introduced):

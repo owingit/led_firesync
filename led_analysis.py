@@ -5,7 +5,6 @@ import os
 import numpy as np
 from scipy import stats
 
-
 import helpers
 import plotting_helpers
 
@@ -508,6 +507,7 @@ if __name__ == '__main__':
     )
 
     parser.add_argument('-i', '--investigate', action='store_true', help='Whether to analyse timeseries')
+    parser.add_argument('-a', '--do_dfa_analysis', action='store_true', help='Whether to analyse with DFA')
     parser.add_argument('-w', '--write_timeseries', action='store_true', help='Whether to plot interactive timeseries')
     parser.add_argument('--with_stats', action='store_true',
                         help='Whether to write the phase and response time alongside the timeseries')
@@ -530,6 +530,8 @@ if __name__ == '__main__':
     parser.add_argument('--do_cc', action='store_true', help='Whether to bother trying connected component analysis')
     parser.add_argument('--do_prc', action='store_true', help='Whether to bother with phase response curve')
     parser.add_argument('--window_size_seconds', type=int, default=5, help='Window size, in seconds, for ts analysis')
+    parser.add_argument('--re_norm', action='store_true', help='Whether to convert from -0.5 - 0.5 to 0.0 - 1.0')
+    parser.add_argument('--do_poincare', action='store_strue', help='Whether to attempt Poincare plots of the phase diffs')
     parser.add_argument('--p', action='store_true', help='Whether to correct for bkgrd stack offset')
     parser.add_argument('--log', action='store_true', help='Whether to log data')
     parser.add_argument('--data_path', type=str, default='data_paths')
@@ -542,5 +544,9 @@ if __name__ == '__main__':
 
     if args.write_timeseries:
         plotting_helpers.write_timeseries_figs(args)
+    if args.do_dfa_analysis:
+        dist_periods, alphas, keys = helpers.do_dfa_crosscorrelation_analysis(args)
+        if dist_periods is not None:
+            plotting_helpers.plot_alpha_vs_dist_period(dist_periods, alphas, keys)
     if args.investigate:
         investigate_timeseries(args)
