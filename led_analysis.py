@@ -9,6 +9,34 @@ import helpers
 import plotting_helpers
 
 
+def get_bout_information(f):
+    if not f:
+        return []
+
+    f = sorted(f)
+    bouts = []
+    current_bout = [f[0]]
+
+    for i in range(1, len(f)):
+        gap = f[i] - f[i - 1]
+        if gap <= 2.0:
+            current_bout.append(f[i])
+        else:
+            if len(current_bout) > 2:
+                interflash_times = np.diff(current_bout)
+                variance = np.var(interflash_times)
+                bouts.append((len(current_bout), variance))
+            current_bout = [f[i]]
+
+    # Handle the final bout
+    if len(current_bout) > 2:
+        interflash_times = np.diff(current_bout)
+        variance = np.var(interflash_times)
+        bouts.append((len(current_bout), variance))
+
+    return bouts
+
+
 def calculate_statistics(d, key, instance, pargs):
     for arg_name, arg_value in vars(pargs).items():
         if arg_name not in ['save_folder', 'p', 'investigate', 'window_size_seconds', 'data_path', 'save_data']:
@@ -67,7 +95,7 @@ def calculate_statistics(d, key, instance, pargs):
 
     rolling_avg_interflash, flash_times_to_plot, mean_interflashes_before, mean_interflashes_after = helpers.r_means(
         rolling_flash_avg_flash_times, led_introduced)
-    indices = [i for i, j in enumerate(list(zip(ff_xs, ff_ys))) if j[0] in flash_times_to_plot]
+
     rolling_flash_periods_after = [x for x in rolling_flash_periods_after if x > min_cutoff]
 
     # Look for first flash synchrony
@@ -88,12 +116,12 @@ def calculate_statistics(d, key, instance, pargs):
     # Find time delays
     time_delays = helpers.find_time_delays(led_xs_flashes, flashes_after, args.window_size_seconds)
     if args.do_ffrt:
-        phases, phase_shifts, phase_time_difs = helpers.compute_phase_response_curve(
-            led_xs_flashes, flashes_after, 0.033, True
+        phases, phase_shifts, phase_time_difs, period = helpers.compute_phase_response_curve(
+            led_xs_flashes, flashes_after, 0.033, float(key)/1000, True
         )
     else:
-        phases, phase_shifts, phase_time_difs = helpers.compute_phase_response_curve(
-            led_xs_flashes, flashes_after, 0.033, False
+        phases, phase_shifts, phase_time_difs, period = helpers.compute_phase_response_curve(
+            led_xs_flashes, flashes_after, 0.033, float(key)/1000, False
         )
     led_ff_diffs = []
     for x in led_xs_flashes:
@@ -130,7 +158,8 @@ def calculate_statistics(d, key, instance, pargs):
 
         _nl = []
         _ln = []
-
+    bouts_before = get_bout_information(flashes_before)
+    bouts_after = get_bout_information(flashes_after)
     # aggregate level statistics
     rmse = np.sqrt(((np.array(rolling_avg_interflash) - np.array(actual)) ** 2).mean())
     rmse_before = np.sqrt(((np.array(mean_interflashes_before) - np.array(actual_before)) ** 2).mean())
@@ -240,6 +269,8 @@ def calculate_statistics(d, key, instance, pargs):
     return {'rmse': rmse,
             'rmse_after': rmse_after,
             'rmse_before': rmse_before,
+            'bouts_before': bouts_before,
+            'bouts_after': bouts_after,
             'phases': phases,
             'phase_shifts': phase_shifts,
             'phase_time_diffs': phase_time_difs,
@@ -295,6 +326,8 @@ def sliding_window_stats(d, pargs):
     rmses = {'rmse': dict.fromkeys(ks, None),
              'rmse_after': dict.fromkeys(ks, None),
              'rmse_before': dict.fromkeys(ks, None),
+             'bouts_before': dict.fromkeys(ks, None),
+             'bouts_after': dict.fromkeys(ks, None),
              'phases': dict.fromkeys(ks, None),
              'phase_shifts': dict.fromkeys(ks, None),
              'phase_time_diffs': dict.fromkeys(ks, None),
@@ -507,7 +540,7 @@ if __name__ == '__main__':
     )
 
     parser.add_argument('-i', '--investigate', action='store_true', help='Whether to analyse timeseries')
-    parser.add_argument('-a', '--do_dfa_analysis', action='store_true', help='Whether to analyse with DFA')
+    parser.add_argument('-a', '--do_nla', action='store_true', help='Whether to analyse with DFA')
     parser.add_argument('-w', '--write_timeseries', action='store_true', help='Whether to plot interactive timeseries')
     parser.add_argument('--with_stats', action='store_true',
                         help='Whether to write the phase and response time alongside the timeseries')
@@ -531,9 +564,11 @@ if __name__ == '__main__':
     parser.add_argument('--do_prc', action='store_true', help='Whether to bother with phase response curve')
     parser.add_argument('--window_size_seconds', type=int, default=5, help='Window size, in seconds, for ts analysis')
     parser.add_argument('--re_norm', action='store_true', help='Whether to convert from -0.5 - 0.5 to 0.0 - 1.0')
-    parser.add_argument('--do_poincare', action='store_strue', help='Whether to attempt Poincare plots of the phase diffs')
+    parser.add_argument('--do_poincare', action='store_true', help='Whether to attempt Poincare plots of the phase diffs')
     parser.add_argument('--p', action='store_true', help='Whether to correct for bkgrd stack offset')
     parser.add_argument('--log', action='store_true', help='Whether to log data')
+    parser.add_argument('--test_synthetic', action='store_true',
+                        help='Whether to test some synthetic data to see how we compare')
     parser.add_argument('--data_path', type=str, default='data_paths')
 
     parser.add_argument('--save_folder', type=str,
@@ -544,9 +579,7 @@ if __name__ == '__main__':
 
     if args.write_timeseries:
         plotting_helpers.write_timeseries_figs(args)
-    if args.do_dfa_analysis:
-        dist_periods, alphas, keys = helpers.do_dfa_crosscorrelation_analysis(args)
-        if dist_periods is not None:
-            plotting_helpers.plot_alpha_vs_dist_period(dist_periods, alphas, keys)
+    if args.do_nla:
+        helpers.do_nonlinear_analysis(args)
     if args.investigate:
         investigate_timeseries(args)

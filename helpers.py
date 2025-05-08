@@ -11,6 +11,9 @@ from statsmodels.tools import add_constant
 import plotting_helpers
 from temp_data import temp_dict
 
+MIN_CUTOFF_PERIOD = 0.25
+MAX_CUTOFF_PERIOD = 2.5
+
 
 def improved_circular_normalize(delays, led_period):
     """
@@ -26,12 +29,12 @@ def improved_circular_normalize(delays, led_period):
     # Normalize using the known LED period
     normalized_delays = (delays % led_period) / led_period
 
-    # Shift to [-0.5, 0.5] range
     normalized_delays = np.where(
-        normalized_delays > 0.5,
-        normalized_delays - 1.0,
-        normalized_delays
+        normalized_delays < 0,  # Check for negative values
+        1.0 + normalized_delays,  # Map [-0.5, 0) to [0.5, 1]
+        normalized_delays  # Keep [0, 0.5] unchanged
     )
+
     return [normalized_delays]
 
 
@@ -103,6 +106,47 @@ def check_frame_rate(input_csv):
         return None, None
 
 
+def generate_simulated_phases(t, length=500, noise=0.05):
+    """
+    Generate synthetic phase differences between two time series in the range [-0.5, 0.5].
+
+    Parameters:
+    - t: Type of phase relationship ('drifting', 'synchronized', 'phase_locked', 'random')
+    - length: Number of time points
+    - noise: Noise level for phase perturbations
+
+    Returns:
+    - p: Array of phase differences in range [-0.5, 0.5]
+    """
+    import numpy as np
+
+    if t == 'drifting':
+        # Phase difference changes at a constant rate over time
+        # Create a smooth linear progression from -0.4 to 0.4
+        base_drift = np.linspace(-0.4, 0.4, length)
+        p = base_drift + np.random.normal(0, noise, length)
+        p = (p + 0.5) % 1 - 0.5  # Ensure values stay in [-0.5, 0.5] range
+
+    elif t == 'synchronized':
+        # Signals are in-phase, phase difference is very close to or equal to 0
+        # Small noise around zero
+        p = np.random.normal(0, noise, length)
+        p = (p + 0.5) % 1 - 0.5  # Wrap properly
+
+    elif t == 'phase_locked':
+        # Constant non-zero phase difference (e.g., locked at 0.25)
+        # Same principle as synchronized but with a non-zero mean
+        fixed_phase = 0.25  # A clear phase offset, but constant
+        p = np.random.normal(fixed_phase, noise, length)
+        p = (p + 0.5) % 1 - 0.5  # Wrap properly
+
+    else:  # t == 'random'
+        # Completely random phase differences
+        p = np.random.uniform(-0.5, 0.5, length)
+
+    return p
+
+
 def renorm_phases(p):
     """
     Map phase values from the interval [-0.5, 0.5] to [0.0, 1.0]
@@ -114,9 +158,6 @@ def renorm_phases(p):
     - phase_list_mapped: phases mapped to appropriate range
     """
 
-    if min(p) < -0.5 or max(p) > 0.5:
-        raise ValueError("Input must be between -0.5 and 0.5")
-
     phase_list_mapped = []
     for x in p:
         if x >= 0:
@@ -124,6 +165,7 @@ def renorm_phases(p):
         else:
             phase_list_mapped.append((x + 1))
     return phase_list_mapped
+
 
 def compute_cross_correlation(led_times, ff_times, max_lag_ms=1000, bin_size_ms=1):
     """
@@ -223,73 +265,60 @@ def recurrence_with_embedding(x, m=2, tau=1, epsilon=None, norm='max'):
     return distances, thresh
 
 
-def false_nearest_neighbors(x, max_dim=10, tau=1, rtol=10, atol=2):
+def cao_embedding_dim(x, max_dim=10, tau=1):
     """
-    Estimate optimal embedding dimension using False Nearest Neighbors method
+    Estimate optimal embedding dimension using Cao's method.
 
     Parameters:
     - x: Time series
     - max_dim: Maximum embedding dimension to test
     - tau: Time delay
-    - rtol: Relative tolerance threshold
-    - atol: Absolute tolerance threshold
 
     Returns:
-    Optimal embedding dimension and FNN percentages
+    - E1: Array of E1(m) values
+    - Recommended embedding dimension
     """
+    N = len(x)
 
     def create_embedding(x, m, tau):
-        """Create time-delay embedding"""
         N = len(x)
         if N < (m - 1) * tau + 1:
             raise ValueError("Insufficient data points for embedding")
-
         X = np.zeros((N - (m - 1) * tau, m))
         for i in range(m):
             X[:, i] = x[i * tau: N - (m - 1) * tau + i * tau]
+
         return X
 
-    fnn_percentages = []
+    def compute_distance_stabilization(m):
+        try:
+            X_m = create_embedding(x, m, tau)
+            X_m1 = create_embedding(x, m + 1, tau)
+        except ValueError:
+            return 2
 
-    for m in range(1, max_dim + 1):
-        # Create embeddings for current and next dimension
-        X_current = create_embedding(x, m, tau)
-        X_next = create_embedding(x, m + 1, tau)
+        # Compute nearest-neighbor distances in m and m+1 dimensions
+        d_m = np.linalg.norm(X_m[:, np.newaxis, :] - X_m[np.newaxis, :, :], axis=-1)
+        d_m1 = np.linalg.norm(X_m1[:, np.newaxis, :] - X_m1[np.newaxis, :, :], axis=-1)
 
-        dist_current = np.linalg.norm(X_current[:, np.newaxis, :] - X_current[np.newaxis, :, :], axis=-1)
+        # Avoid self-comparison by setting diagonals to infinity
+        np.fill_diagonal(d_m, np.inf)
+        np.fill_diagonal(d_m1, np.inf)
 
-        # Mask the diagonal to ignore self-distances
-        np.fill_diagonal(dist_current, np.inf)
-        nn_indices = np.argmin(dist_current, axis=1)
+        # Find nearest neighbors in m-dimension
+        min_indices = np.argmin(d_m, axis=1)
+        safe_min_indices = np.clip(min_indices[:len(d_m1)], 0, d_m1.shape[1] - 1)
+        valid_indices = np.arange(len(d_m1))  # Match d_m1 row count
+        E1_m = np.mean(d_m1[valid_indices, safe_min_indices] / d_m[valid_indices, safe_min_indices])
 
-        # Count false nearest neighbors
-        valid_length = min(len(X_current), len(X_next))
+        return E1_m
 
-        # Count false nearest neighbors
-        false_nn = 0
-        for i in range(valid_length):
-            nn_idx = nn_indices[i]
-            # Ensure valid nearest neighbor index
-            if nn_idx >= len(X_next):
-                continue  # Skip invalid index
-
-            # Relative and absolute distances in the next dimension
-            rel_dist_next = np.abs(X_next[i, -1] - X_next[nn_idx, -1]) / dist_current[i, nn_idx]
-            abs_dist_next = np.abs(X_next[i, -1] - X_next[nn_idx, -1])
-
-            # Check for false nearest neighbors
-            if (rel_dist_next > rtol) or (abs_dist_next < atol):
-                false_nn += 1
-
-        # Calculate percentage of false nearest neighbors
-        fnn_percentage = false_nn / len(X_current) * 100
-        fnn_percentages.append(fnn_percentage)
-
-        # Typical stopping criterion: below 10% false nearest neighbors
-        if fnn_percentage < 10:
-            break
-
-    return fnn_percentages
+    E1 = np.array([compute_distance_stabilization(m) for m in range(1, max_dim + 1)])
+    try:
+        embedding_dim = np.argmax(np.abs(E1[1:] - E1[:-1]) < 0.01) + 1
+        return embedding_dim
+    except TypeError:
+        return E1
 
 
 def estimate_embedding_params(x, max_tau=10):
@@ -311,14 +340,182 @@ def estimate_embedding_params(x, max_tau=10):
 
     mis = [mutual_information(x, tau) for tau in range(1, max_tau + 1)]
     tau = np.argmin(mis) + 1
-    #fnn_percentages = false_nearest_neighbors(x, max_dim=10, tau=tau)
-    # Find dimension where FNN drops below 10%
-    embed_dim = 2
+
+    embed_dim = cao_embedding_dim(x, 10, tau)
 
     return tau, embed_dim
 
 
-def recurrence(ps, method='median'):
+def sinusoid(x, A, B, C, D):
+    return A * np.sin(B * x + C) + D
+
+
+def recurrence_period_density_entropy(R, normalize=True):
+    n = R.shape[0]
+    period_counts = {}
+
+    # Loop over all possible time delays (i.e., diagonals above the main one)
+    for tau in range(1, n):
+        diag = np.diag(R, k=tau)
+        recurrence_count = np.sum(diag)
+        if recurrence_count > 0:
+            period_counts[tau] = recurrence_count
+
+    if not period_counts:
+        return 0.0  # no recurrence periods found
+
+    # Convert counts to probability distribution
+    total_counts = sum(period_counts.values())
+    p = np.array([count / total_counts for count in period_counts.values()])
+
+    # Shannon entropy
+    entropy = -np.sum(p * np.log(p))
+
+    if normalize:
+        entropy /= np.log(len(period_counts))  # normalized to [0, 1]
+
+    return entropy
+
+
+def circular_autocorrelation(phases, max_lag=None):
+    phases = np.array(phases)
+    n = len(phases)
+    if max_lag is None:
+        max_lag = n - 1
+
+    # Convert to complex form on the unit circle
+    z = np.exp(1j * phases)
+
+    ac = []
+    for tau in range(1, max_lag + 1):
+        r = np.mean(z[:-tau] * np.conj(z[tau:]))
+        ac.append(np.abs(r))  # or r.real for cosine component
+    return np.array(ac)
+
+
+def fit_prc(phases, shifts, d, k, i):
+    """
+    Fit mean phase response curve
+
+    Parameters:
+    - phases: phase differences
+    - shifts: phase shifts
+    - d, k, i: date, key, index of experiment
+
+    Returns:
+    - fit_y: best fit (poly or sinusoidal) for the phase response curve
+    """
+    to_plot_phase_avgs = improved_circular_normalize(
+        np.array(phases), float(k) / 1000)[0]
+
+    sorted_data = sorted(zip(to_plot_phase_avgs, shifts), key=lambda x: x[0], reverse=True)
+    tps, tss = zip(*sorted_data)
+    tps, tss = np.array(tps), np.array(tss)
+    initial_guess = [np.ptp(tss) / 2, 2 * np.pi / np.ptp(tps), 0, np.ptp(tss)]
+    lower_bounds = [-np.inf, -np.inf, -np.inf, 0]
+    upper_bounds = [np.inf, np.inf, np.inf, np.inf]
+    bounds = (lower_bounds, upper_bounds)
+
+    try:
+        params, _ = optimize.curve_fit(sinusoid, tps, tss, p0=initial_guess, bounds=bounds)
+    except RuntimeError:
+        params = initial_guess
+        print(f'using initial guess on {d, k, i}')
+
+    fit_x = np.linspace(0.0, 1.0, 200)
+    poly_coeffs = np.polyfit(tps, tss, deg=3)  # Get coefficients [a, b, c, d]
+    poly_func = np.poly1d(poly_coeffs)  # Create a polynomial function
+    poly_fit_y = poly_func(fit_x)
+    sinusoid_residuals = tss - sinusoid(tps, *params)
+    sinusoid_rmse = np.sqrt(np.mean(sinusoid_residuals ** 2))
+    poly_residuals = tss - poly_func(tps)
+    poly_rmse = np.sqrt(np.mean(poly_residuals ** 2))
+
+    # Select the better model
+    if sinusoid_rmse < poly_rmse:
+        best_fit_y = sinusoid(fit_x, *params)
+        fit_label = "Sinusoidal Fit"
+        best_residuals = sinusoid_residuals
+    else:
+        best_fit_y = poly_fit_y
+        fit_label = "Cubic Polynomial Fit"
+        best_residuals = poly_residuals
+
+    ss_total = np.sum((tss - np.mean(tss)) ** 2)
+    ss_residuals = np.sum(best_residuals ** 2)
+    r_squared = 1 - (ss_residuals / ss_total)
+    print(f"R² Score: {r_squared}")
+    baseline_rmse = np.sqrt(np.mean((tss - np.mean(tss)) ** 2))  # RMSE of using mean as predictor
+    rmse = np.sqrt(np.mean(best_residuals ** 2))  # RMSE of sinusoidal fit
+    if baseline_rmse > 0:
+        improvement = (1 - rmse / baseline_rmse) * 100
+    else:
+        improvement = 0
+    print(f"Baseline RMSE: {baseline_rmse:.4f}")
+    print(f"Model RMSE with {fit_label}: {rmse:.4f}")
+    print(f"Improvement: {improvement:.2f}%")
+    fit_y = best_fit_y
+
+    return fit_y
+
+
+def recurrence_metrics(recurrence_matrix):
+    """
+    Calculate metrics on the recurrence matrix
+
+    Parameters:
+    - recurrence matrix: np array of recurrence plot
+
+    Returns:
+    - recurrence rate, determinance, laminarity
+    """
+    n = recurrence_matrix.shape[0]
+
+    # Recurrence Rate (RR)
+    rr = np.sum(recurrence_matrix) / (n * n)
+
+    # Find diagonal lines of length >= 2
+    diag_lengths = []
+    for offset in range(-n + 1, n):
+        diag = np.diagonal(recurrence_matrix, offset=offset)
+        lengths = np.diff(np.where(np.concatenate(([0], diag, [0])) == 0)[0]) - 1
+        diag_lengths.extend(lengths[lengths >= 2])
+
+    # Determinism (DET)
+    if np.sum(recurrence_matrix) == 0:
+        det = 0  # Avoid division by zero
+    else:
+        det = np.sum(diag_lengths) / np.sum(recurrence_matrix)
+
+    # Find vertical lines of length >= 2
+    vert_lengths = []
+    for j in range(n):
+        col = recurrence_matrix[:, j]
+        lengths = np.diff(np.where(np.concatenate(([0], col, [0])) == 0)[0]) - 1
+        vert_lengths.extend(lengths[lengths >= 2])
+
+    # Laminarity (LAM)
+    if np.sum(recurrence_matrix) == 0:
+        lam = 0
+    else:
+        lam = np.sum(vert_lengths) / np.sum(recurrence_matrix)
+    rpde = recurrence_period_density_entropy(recurrence_matrix)
+
+    return rr, det, lam, rpde
+
+
+def recurrence(ps, method='median', do_stats=False):
+    """
+    Calculate recurrence plot on list of phases
+
+    Parameters:
+    - ps: list of phase differences
+    - method: epsilon distance method for recurrence closeness
+
+    Returns:
+    - recurrence matrix, as well as the tau and embedding dimension if method == 'embedding',
+      and statistics about the matrix or None if unspecified
+    """
     phases = np.array(ps)
     distances = np.abs(phases[:, np.newaxis] - phases[np.newaxis, :])
 
@@ -335,14 +532,407 @@ def recurrence(ps, method='median'):
         distances, threshold = recurrence_with_embedding(phases, embed_dim, tau)
     recurrence_matrix = distances <= threshold
 
-    return recurrence_matrix, tau, embed_dim
+    if do_stats:
+        return recurrence_matrix, tau, embed_dim, recurrence_metrics(recurrence_matrix)
+
+    else:
+        return recurrence_matrix, tau, embed_dim, None
 
 
-def do_dfa_crosscorrelation_analysis(pargs):
+def bout_analysis(pargs):
+    """
+    Investigate bouts that appear near-synchronous
+
+    Parameters:
+    - pargs: command line arguments with some flags and such
+    """
     fpaths = os.listdir(pargs.data_path)
-    dist_periods = []
-    alphas = []
-    keys = []
+
+    # date_key_index: [min_time, max_time]
+    bouts_to_inspect = {
+        '20210527_500_47': [195, 205],
+        '20230523_300_106': [238, 246],
+        '20220529_400_101': [347, 352],
+        '20210526_600_40': [225, 237],
+        '20210522_700_10': [94, 131],
+        '20210525_600_34': [305, 322],
+        '20210528_850_53': [210, 242],
+        '20210529_1000_51': [122, 142],
+        '20221521_770_5': [150, 165],
+        '20220524_500_83': [308, 322],
+    }
+    for fp in fpaths:
+        path, framerate = check_frame_rate(pargs.data_path + '/' + fp)
+        if path is None:
+            continue
+
+        date = path.split('_')[1].split('/')[1]
+        key = path.split('_')[2]
+        index = path.split('_')[3].split('.')[0]
+
+        if pargs.log:
+            print(f'Bout Analysis on timeseries from {date} with led freq {key}')
+        with open(path, 'r') as data_file:
+            ts = {'ff': [], 'led': []}
+            data = list(csv.reader(data_file))
+            if date[0] == '0':
+                date = date[-4:] + date[:-4]
+            for line in data[1:]:
+                try:
+                    ts['ff'].append(line[0])
+                    ts['led'].append(line[1])
+                except IndexError:
+                    print(f'Error loading data with {fp}')
+
+            # Prepare time series data
+            expname = '{}_{}_{}'.format(date, key, index)
+            try:
+                min_x, max_x = bouts_to_inspect[expname]
+                boutname = '{}_[{}_{}]'.format(expname, min_x, max_x)
+
+                ff_xs = []
+                ff_ys = []
+                for x in ts['ff']:
+                    x_val, y_val = eval(x)
+                    x_val = float(x_val)
+                    if min_x <= x_val <= max_x:
+                        ff_xs.append(x_val)
+                        ff_ys.append(0.0 if float(y_val) == 0.0 else 0.5)
+
+                led_xs = []
+                led_ys = []
+                for x in ts['led']:
+                    x_val, y_val = eval(x)
+                    x_val = float(x_val)
+                    if min_x <= x_val <= max_x:
+                        led_xs.append(x_val)
+                        led_ys.append(0.5 if float(y_val) == 1.0 else 0.502)
+
+                led_xs_flashes = [x for x, y in zip(led_xs, led_ys) if y == 0.502]
+                ff_xs_flashes = [x for x, y in zip(ff_xs, ff_ys) if y == 0.5]
+                _, _, pairs, period = compute_phase_response_curve(time_series_led=led_xs_flashes,
+                                                                   time_series_ff=ff_xs_flashes,
+                                                                   epsilon=0.08,
+                                                                   m=float(key)/1000,
+                                                                   do_responses_relative_to_ff=pargs.do_ffrt,
+                                                                   only_lookback=pargs.re_norm)
+
+                times, phases, responses, shifts = zip(*[(t, p, r, s) for p, r, s, t in pairs])
+                # PRC
+                from collections import defaultdict
+                shift_sums = defaultdict(lambda: [0, 0])  # [sum of shifts, count]
+
+                # Aggregate shifts per phase
+                for p, s in zip(phases, shifts):
+                    p = round(p, 6)
+                    if MIN_CUTOFF_PERIOD <= s <= MAX_CUTOFF_PERIOD:
+                        shift_sums[p][0] += s
+                        shift_sums[p][1] += 1
+
+                # Compute averages
+                to_plot_phase_avgs = []
+                to_plot_shift_avgs = []
+
+                for p, (shift_sum, count) in shift_sums.items():
+                    to_plot_phase_avgs.append(p)
+                    to_plot_shift_avgs.append(shift_sum / count)
+
+                to_plot_phases = []
+                to_plot_shifts = []
+                for p, s in zip(phases, shifts):
+                    if MIN_CUTOFF_PERIOD <= s <= MAX_CUTOFF_PERIOD:
+                        to_plot_phases.append(p)
+                        to_plot_shifts.append(s)
+                fig, ax = plt.subplots()
+                ax.scatter(to_plot_phases, to_plot_shifts, color='orange')
+                ax.axhline(1.0, color='black', linestyle='-')
+                ax.set_xlabel('Phase difference')
+                ax.set_xlabel('Phase shift')
+                ax.set_xlim([0.0, float(key)/1000])
+                ax.set_ylim([0.0, 2.75])
+                plt.savefig('figs/prc_{}'.format(boutname))
+                plt.close()
+            except KeyError:
+                continue
+
+
+def get_bout_indices(flash_times, max_gap=2.0):
+    """
+    Returns a list of (start_idx, end_idx) index pairs for each bout,
+    where a bout is a sequence of flashes with inter-flash gaps ≤ max_gap.
+    """
+    bout_indices = []
+    if not flash_times:
+        return bout_indices
+
+    start = 0
+    for i in range(1, len(flash_times)):
+        if flash_times[i] - flash_times[i - 1] > max_gap:
+            if i - 1 >= start:
+                bout_indices.append((start, i - 1))
+            start = i
+    if start <= len(flash_times) - 1:
+        bout_indices.append((start, len(flash_times) - 1))  # Final bout
+    return bout_indices
+
+
+def compute_det_and_lam_and_rr(R, l_min=2, v_min=2):
+    """
+    Computes DET and LAM and Recurrence Rate for a given recurrence submatrix R.
+    l_min: min diagonal length
+    v_min: min vertical length
+    """
+    if np.sum(R) == 0:
+        return 0.0, 0.0, 0.0
+
+    # --- Determinism ---
+    diag_lengths = []
+    n = R.shape[0]
+    for offset in range(-n + 1, n):
+        diag = np.diagonal(R, offset=offset)
+        lengths = np.diff(np.where(np.concatenate(([0], diag, [0])) == 0)[0]) - 1
+        diag_lengths.extend(lengths[lengths >= l_min])
+    det = np.sum(diag_lengths) / np.sum(R)
+
+    # --- Laminarity ---
+    vert_lengths = []
+    for col in range(n):
+        column = R[:, col]
+        lengths = np.diff(np.where(np.concatenate(([0], column, [0])) == 0)[0]) - 1
+        vert_lengths.extend(lengths[lengths >= v_min])
+    lam = np.sum(vert_lengths) / np.sum(R)
+
+    rr = np.sum(R) / (n * n)
+
+    return det, lam, rr
+
+
+def windowed_rqa(recurrence_matrix, flash_times, led_start_time, name, times, phases, shifts, responses, max_gap=2.0):
+    ft = [x for x in flash_times if x >= led_start_time]
+    prior_flashes = [x for x in flash_times if x < led_start_time]
+
+    if len(prior_flashes) >= 2:
+        prior_periods = np.diff(prior_flashes)
+        prior_period = np.median(prior_periods)
+        prior_period_var = np.var(prior_periods)
+    else:
+        prior_period = np.nan
+        prior_period_var = np.nan
+
+    flash_times = dedupe(ft, eps=0.08)
+    bout_ranges = get_bout_indices(flash_times, max_gap=max_gap)
+    results = []
+
+    for start, end in bout_ranges:
+        sub_R = recurrence_matrix[start:end, start:end]
+        det, lam, rr = compute_det_and_lam_and_rr(sub_R)
+
+        bout_start_time = flash_times[start]
+        bout_end_time = flash_times[end]
+
+        # Subset the PRC-related values
+        bout_phases = []
+        bout_shifts = []
+        bout_responses = []
+        for t, p, s, r in zip(times, phases, shifts, responses):
+            if bout_start_time <= t <= bout_end_time:
+                bout_phases.append(p)
+                bout_shifts.append(s)
+                bout_responses.append(r)
+
+        results.append({
+            "start_idx": bout_start_time,
+            "end_idx": bout_end_time,
+            "duration": bout_end_time - bout_start_time,
+            "num_flashes": end - start,
+            "det": det,
+            "lam": lam,
+            "rr": rr,
+            "name": name,
+            "phases": bout_phases,
+            "shifts": bout_shifts,
+            "responses": bout_responses,
+            "prior_period": prior_period,
+            "prior_period_var": prior_period_var,
+        })
+
+    return results
+
+
+def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num_flashes=10, plot_prc=False):
+    """
+    Extracts, saves, and plots the top 10 and bottom 10 bouts by DET + LAM.
+
+    Parameters:
+    - metrics_dict: dict containing bout start and end indices and statistics
+    - bout_gap_length: gap length to use (2-5)
+    - pargs: program arguments
+    - top_n: how many to show (default 10)
+    - num_flashes: how many flashes need to be in the top
+    - plot_prc: whether to plot the phase response curve for the bouts
+    """
+    bouts = []
+    for key, bouts_list in metrics_dict[bout_gap_length].items():
+        for bout in bouts_list:
+            if bout['det'] > 0.1 and bout['lam'] > 0.1:
+                score = bout['det'] + bout['lam']
+                bouts.append((key, bout, score, bout['num_flashes']))
+
+    # Sort by score and only select top if they have enough flashes
+    sorted_bouts = sorted(bouts, key=lambda x: x[2], reverse=True)
+    top_bouts = [b for b in sorted_bouts if b[3] > num_flashes][:top_n]
+    bottom_bouts = sorted_bouts[-top_n:]
+    selected_bouts = top_bouts + bottom_bouts
+
+    for i, (key, bout, score, nf) in enumerate(selected_bouts):
+        date, led_freq, index = key.split('_')
+
+        # Construct file path
+        fname = f"{date}_{led_freq}_{index}.csv"
+        fpath = os.path.join(pargs.data_path, fname)
+
+        if not os.path.exists(fpath):
+            date = date[-4:] + date[:-4]
+            fname = f"{date}_{led_freq}_{index}.csv"
+            fpath = os.path.join(pargs.data_path, fname)
+            if not os.path.exists(fpath):
+                continue
+
+        # Load data
+        with open(fpath, 'r') as data_file:
+            ts = {'ff': [], 'led': []}
+            data = list(csv.reader(data_file))
+            for line in data[1:]:
+                try:
+                    ts['ff'].append(line[0])
+                    ts['led'].append(line[1])
+                except IndexError:
+                    print(f'Error loading data with {fpath}')
+
+            # Prepare time series data
+            if date[0] == '0':
+                date = date[-4:] + date[:-4]
+            expname = '{}_{}_{}'.format(date, key, index)
+            min_x, max_x = bout['start_idx'], bout['end_idx']
+            boutname = '{}_[{}_{}]'.format(expname, min_x, max_x)
+
+            ff_xs = []
+            ff_ys = []
+            for x in ts['ff']:
+                x_val, y_val = eval(x)
+                x_val = float(x_val)
+                if min_x <= x_val <= max_x:
+                    ff_xs.append(x_val)
+                    ff_ys.append(0.0 if float(y_val) == 0.0 else 0.5)
+            led_xs = []
+            led_ys = []
+            for x in ts['led']:
+                x_val, y_val = eval(x)
+                x_val = float(x_val)
+                if min_x <= x_val <= max_x:
+                    led_xs.append(x_val)
+                    led_ys.append(0.5 if float(y_val) == 1.0 else 0.502)
+            led_xs_flashes = [x for x, y in zip(led_xs, led_ys) if y == 0.502]
+            led_xs_flashes = dedupe(led_xs_flashes, 0.08)
+            ff_xs_flashes = [x for x, y in zip(ff_xs, ff_ys) if y == 0.5]
+            ff_xs_flashes = dedupe(ff_xs_flashes, 0.08)
+            # Save to CSV
+            outname = f'bout_{i:02d}_score_{score:.2f}_{key}_[{min_x}-{max_x}].csv'
+            outpath = os.path.join(f'bouts_{bout_gap_length}', outname)
+            os.makedirs(f'bouts_{bout_gap_length}', exist_ok=True)
+
+            with open(outpath, 'w', newline='') as outcsv:
+                writer = csv.writer(outcsv)
+                writer.writerow(['FF', 'LED'])
+                writer.writerows(zip(ff_xs_flashes, led_xs_flashes))
+            print(f"Saved {outpath}")
+            plt.figure(figsize=(6, 2))
+
+            # Highlight flash points
+            plt.scatter(ff_xs_flashes, [0.5] * len(ff_xs_flashes), color='green', s=10, marker='o', label='FF flashes')
+            plt.scatter(led_xs_flashes, [0.51] * len(led_xs_flashes), color='purple', s=10, marker='x',
+                        label='LED flashes')
+
+            plt.ylim(0.49, 0.52)
+            plt.title(f'{boutname}\nScore: {score:.2f}')
+            plt.xlabel('Time')
+            plt.ylabel('Signal')
+            plt.legend(loc='upper right', fontsize='x-small', frameon=False)
+            plt.tight_layout()
+
+            # Save plot
+            plotname = f'bout_{i:02d}_score_{score:.2f}_{key}[{min_x}-{max_x}].png'
+            plotpath = os.path.join(f'bouts_{bout_gap_length}', plotname)
+            plt.savefig(plotpath, dpi=150)
+            plt.close()
+
+            if plot_prc:
+                _, _, pairs, period = compute_phase_response_curve(
+                    time_series_led=led_xs_flashes,
+                    time_series_ff=ff_xs_flashes,
+                    epsilon=0.08,
+                    m=float(key)/1000,
+                    do_responses_relative_to_ff=pargs.do_ffrt,
+                    only_lookback=pargs.re_norm
+                )
+                times, phases, responses, shifts = zip(*[(t, p, r, s) for p, r, s, t in pairs])
+                from collections import defaultdict
+                shift_sums = defaultdict(lambda: [0, 0])  # [sum of shifts, count]
+
+                # Aggregate shifts per phase
+                for p, s in zip(phases, shifts):
+                    p = round(p, 6)
+                    if MIN_CUTOFF_PERIOD <= s <= MAX_CUTOFF_PERIOD:
+                        shift_sums[p][0] += s
+                        shift_sums[p][1] += 1
+
+                # Compute averages
+                to_plot_phase_avgs = []
+                to_plot_shift_avgs = []
+
+                for p, (shift_sum, count) in shift_sums.items():
+                    to_plot_phase_avgs.append(p)
+                    to_plot_shift_avgs.append(shift_sum / count)
+
+                to_plot_phases = []
+                to_plot_shifts = []
+                for p, s in zip(phases, shifts):
+                    if MIN_CUTOFF_PERIOD <= s <= MAX_CUTOFF_PERIOD:
+                        to_plot_phases.append(p)
+                        to_plot_shifts.append(s)
+                fig, ax = plt.subplots()
+                ax.scatter(to_plot_phases, to_plot_shifts, color='grey')
+                ax.scatter(to_plot_phase_avgs, to_plot_shift_avgs, color='orange')
+                ax.set_xlim(0.0, 1.0)
+                ax.set_ylim(0.5, 2.0)
+                ax.axhline(1.0, linestyle='-', color='black', alpha=0.7)
+                plotname = f'bout_{i:02d}_score_{score:.2f}_{key}[{min_x}-{max_x}].png'
+
+                plotpath = os.path.join(f'bouts_{bout_gap_length}', 'prc_{}'.format(plotname))
+                plt.savefig(plotpath, dpi=150)
+                plt.close()
+
+
+def do_nonlinear_analysis(pargs):
+    """
+    Perform various non-linear analyses on the dataset
+    Right now:
+        - gets each file in the data path
+        - splits the LED and FF timeseries
+        - calculates phase response curve from the two timseries, as well as phases, firefly periods, etc
+        - recurrence plots
+        - detrended fluctuation analysis
+        - cross- and auto-correlation
+        - poincare plots
+
+    Parameters:
+    - pargs: command line arguments with some flags and such
+    """
+    fpaths = os.listdir(pargs.data_path)
+    metrics_dict = {bl: {} for bl in [2.0, 3.0, 4.0, 5.0]}
+    phases_dict = {bl: {} for bl in [2.0, 3.0, 4.0, 5.0]}
+
+    do_bouts = True
     for fp in fpaths:
         path, framerate = check_frame_rate(pargs.data_path + '/' + fp)
         if path is None:
@@ -374,22 +964,24 @@ def do_dfa_crosscorrelation_analysis(pargs):
             led_xs_flashes = [x for x, y in zip(led_xs, led_ys) if y == 0.502]
             ff_xs_flashes = [x for x, y in zip(ff_xs, ff_ys) if y == 0.5]
 
+            ### NLAnalysis
             _, _, pairs, period = compute_phase_response_curve(time_series_led=led_xs_flashes,
                                                                time_series_ff=ff_xs_flashes,
-                                                               epsilon=0.035,  # one frame
-                                                               do_responses_relative_to_ff=pargs.do_ffrt)
+                                                               epsilon=0.08,  # one frame
+                                                               m=float(key) / 1000,
+                                                               do_responses_relative_to_ff=pargs.do_ffrt,
+                                                               only_lookback=pargs.re_norm)
 
-            times, phases, responses = zip(*[(t, p, r) for p, r, t in pairs])
+            times, phases, responses, shifts = zip(*[(t, p, r, s) for p, r, s, t in pairs])
             figtitle = 'figs/analysis/DFA_Analysis_and_Cross-Correlation_of_phases_{}_{}_{}.png'.format(date, key, index)
 
-            # NLAnalysis
             if pargs.re_norm:
-                phases = renorm_phases(phases)
-                figtitle = 'figs/analysis/DFA_Analysis_and_Cross-Correlation_of_phases_0-1_{}_{}_{}.png'.format(date, key, index)
+                # phases = renorm_phases(phases)
+                figtitle = 'figs/analysis/DFA_Analysis_and_Cross-Correlation_of_phases_0-1_{}_{}_{}.png'.format(date,
+                                                                                                                key,
+                                                                                                                index)
             scales, fluctuations, alpha, ci = dfa(phases)
             lags, correlation = compute_cross_correlation(led_xs_flashes, ff_xs_flashes)
-            if period is not None:
-                d = np.median(period['periods'][1]) - (float(key) / 1000)
             if pargs.log:
                 if alpha is not None:
                     phase_hurst, _ = whittle_mle(phases)
@@ -401,6 +993,11 @@ def do_dfa_crosscorrelation_analysis(pargs):
                     print(f"Hurst exp: {phase_hurst:.4f} ")
                     print(f"Peak Correlation: {peak_correlation:.4f}")
                     print(f"Peak Lag: {peak_lag:.4f} ms")
+
+            pfigtitle = 'figs/analysis/autocorrelation_of_phases_{}_{}_{}.png'.format(date, key, index)
+            if pargs.re_norm:
+                pfigtitle = 'figs/analysis/autocorrelation_of_phases_0-1_{}_{}_{}.png'.format(date, key, index)
+            plotting_helpers.plot_autocorrelation(phases, pfigtitle)
 
             if pargs.do_poincare:
                 pcare_figtitle = 'figs/analysis/Poincare_of_phases_{}_{}_{}.png'.format(date, key, index)
@@ -422,26 +1019,46 @@ def do_dfa_crosscorrelation_analysis(pargs):
             plt.savefig(figtitle)
             plt.close(fig)
 
-            for method in ['median', 'percentage', 'point_density', 'embedding']:
-                r_currences, t, e = recurrence(phases, method)
-                fig, ax = plt.subplots()
-                plotting_helpers.plot_recurrence(r_currences, ax, method, t, e)
-                figtitle = 'figs/analysis/Recurrence_by_{}thresh_of_phases_{}_{}_{}.png'.format(
-                    method, date, key, index
-                )
-                if pargs.re_norm:
-                    figtitle = 'figs/analysis/Recurrence_by_{}thresh_of_phases_0-1_{}_{}_{}.png'.format(
-                        method, date, key, index
-                    )
-                plt.tight_layout()
-                plt.savefig(figtitle)
-                plt.close(fig)
-            if alpha is not None:
-                if d is not None:
-                    dist_periods.append(d)
-                    alphas.append(alpha)
-                    keys.append(key)
-    return dist_periods, alphas, keys
+            for data_type in ['real']:
+                for bout_gap_length in [2.0, 3.0, 4.0, 5.0]:
+                    if data_type == 'real':
+                        for method in ['percentage']:
+                        #for method in ['median', 'percentage', 'point_density', 'embedding']:
+                            r_currences, t, e, metrics = recurrence(phases, method, do_stats=True)
+                            if not do_bouts:
+                                if method == 'percentage':
+                                    metrics_dict[bout_gap_length]['{}_{}_{}'.format(date, key, index)] = metrics
+                                    phases_dict[bout_gap_length]['{}_{}_{}'.format(date, key, index)] = phases
+                            else:
+                                if method == 'percentage':
+                                    led_start_time = led_xs_flashes[0]
+                                    metrics = windowed_rqa(r_currences, ff_xs_flashes, led_start_time,
+                                                           '{}_{}_{}'.format(date, key, index),
+                                                           times, phases, shifts, responses, max_gap=bout_gap_length)
+                                    metrics_dict[bout_gap_length]['{}_{}_{}'.format(date, key, index)] = metrics
+                                    phases_dict[bout_gap_length]['{}_{}_{}'.format(date, key, index)] = phases
+
+                                    r_currences, t, e, metrics = recurrence(phases, method, do_stats=True)
+
+                            fig, ax = plt.subplots()
+                            plotting_helpers.plot_recurrence(r_currences, ax, method, t, e, metrics)
+                            figtitle = 'figs/analysis/Recurrence_by_{}thresh_of_phases_{}_{}_{}.png'.format(
+                                method, date, key, index
+                            )
+                            if pargs.re_norm:
+                                figtitle = 'figs/analysis/Recurrence_by_{}thresh_of_phases_0-1_{}_{}_{}.png'.format(
+                                    method, date, key, index
+                                )
+                            plt.tight_layout()
+                            plt.savefig(figtitle)
+                            plt.close(fig)
+
+    for bout_gap_length in [2.0, 3.0, 4.0, 5.0]:
+        plotting_helpers.plot_recurrence_bouts(metrics_dict[bout_gap_length], bout_gap_length)
+        plotting_helpers.plot_prc_by_key(metrics_dict[bout_gap_length], bout_gap_length)
+        extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs,
+                                 top_n=10, num_flashes=10, plot_prc=True)
+    print('here')
 
 
 def dfa(time_series, scale_range=None, polynomial_order=2):
@@ -639,7 +1256,9 @@ def dedupe(flash_list, eps):
     return deduped_flash_list
 
 
-def compute_phase_response_curve(time_series_led, time_series_ff, epsilon=0.04, do_responses_relative_to_ff=False):
+def compute_phase_response_curve(time_series_led, time_series_ff, epsilon=0.08, m=0.0,
+                                 do_responses_relative_to_ff=False,
+                                 only_lookback=False):
     """
     Compute the phase response curve (PRC) of fireflies relative to LED flashes.
 
@@ -649,21 +1268,24 @@ def compute_phase_response_curve(time_series_led, time_series_ff, epsilon=0.04, 
     - epsilon: maximum time difference (in seconds) between frames to be considered the same flash
     - do_responses_relative_to_ff: boolean indicating whether to calculate FL-Response Time [FF_t - LED_(t-1)] or
                                    FF-Response Time [FF_t - FF_(t-1)]
+    - only_lookback: only calculate phases relative to prior LED time, not subsequent
 
 
     Returns:
     - phases: list of normalized phases (firefly phase relative to LED)
     - response_times: list of response times (time difference between firefly flash and previous LED)
     - phase_time_diff_pairs: list of (phase, response_time, firefly_time) tuples
+    - period: endogenous period of the firefly, if it flashed before the LED was started
     """
     led_times_array = np.array(time_series_led)
     firefly_times_array = np.array(time_series_ff)
     phases = []
     response_times = []
     phase_time_diff_pairs = []
+    phase_shifts = []
 
     if len(led_times_array) < 2 or len(firefly_times_array) < 1:
-        return [], [], []
+        return [], [], [], [], None
 
     # deduplicate firefly flash times array
     # accounting to ensure two- or more frame flashes are seen as the same flash
@@ -672,30 +1294,57 @@ def compute_phase_response_curve(time_series_led, time_series_ff, epsilon=0.04, 
     deduplicated_ff_times = np.array(deduplicated_ff_times)
     deduplicated_led_times = np.array(deduplicated_led_times)
     period = detect_period_before_first_led_flash(deduplicated_ff_times, deduplicated_led_times)
-
+    if period is None:
+        # Fallback if we can't determine the period from pre-LED data
+        print("Warning: Could not determine period from pre-LED data")
+        if len(np.diff(deduplicated_ff_times)) > 0:
+            period = {'period_estimate': stats.mode(np.diff(deduplicated_ff_times))[0][0]}
+        else:
+            return [], [], [], [], None
     if do_responses_relative_to_ff:
+        previous_response_time = period['period_estimate']
         for i in range(1, len(deduplicated_ff_times)):
             firefly_time = deduplicated_ff_times[i]
             previous_firefly_time = deduplicated_ff_times[i - 1]
 
             closest_led_idx = np.argmin(np.abs(deduplicated_led_times - firefly_time))
             closest_led_time = deduplicated_led_times[closest_led_idx]
-
+            if only_lookback:
+                previous_led_candidates = deduplicated_led_times[deduplicated_led_times <= firefly_time]
+                if len(previous_led_candidates) == 0:
+                    continue
+                else:
+                    previous_led_time = np.max(previous_led_candidates)
+                    closest_led_time = previous_led_time
             phase = firefly_time - closest_led_time
             phases.append(phase)
 
             response_time = firefly_time - previous_firefly_time
             response_times.append(response_time)
 
-            if -0.5 <= phase <= 0.5:
-                phase_time_diff_pairs.append((phase, response_time, firefly_time))
+            phase_shift = response_time / previous_response_time
+            phase_shifts.append(phase_shift)
+            previous_response_time = response_time
+            if only_lookback:
+                if 0.0 <= phase <= m:
+                    phase_time_diff_pairs.append((phase, response_time, phase_shift, firefly_time))
+            else:
+                if -0.5 <= phase <= 0.5:
+                    phase_time_diff_pairs.append((phase, response_time, phase_shift, firefly_time))
 
     else:
+        previous_response_time = period['period_estimate']
         # Now compute the phase response curve with deduplicated flashes
         for firefly_time in deduplicated_ff_times:
             closest_led_idx = np.argmin(np.abs(deduplicated_led_times - firefly_time))
             closest_led_time = deduplicated_led_times[closest_led_idx]
-
+            if only_lookback:
+                previous_led_candidates = deduplicated_led_times[deduplicated_led_times <= firefly_time]
+                if len(previous_led_candidates) == 0:
+                    continue
+                else:
+                    previous_led_time = np.max(previous_led_candidates)
+                    closest_led_time = previous_led_time
             phase = firefly_time - closest_led_time
             phases.append(phase)
 
@@ -708,7 +1357,16 @@ def compute_phase_response_curve(time_series_led, time_series_ff, epsilon=0.04, 
                 response_time = firefly_time - previous_led_time
                 response_times.append(response_time)
 
-                phase_time_diff_pairs.append((phase, response_time, firefly_time))
+                phase_shift = response_time / previous_response_time
+                phase_shifts.append(phase_shift)
+                previous_response_time = response_time
+
+                if only_lookback:
+                    if 0.0 <= phase <= m:
+                        phase_time_diff_pairs.append((phase, response_time, phase_shift, firefly_time))
+                else:
+                    if -0.5 <= phase <= 0.5:
+                        phase_time_diff_pairs.append((phase, response_time, phase_shift, firefly_time))
 
     return phases, response_times, phase_time_diff_pairs, period
 
@@ -954,13 +1612,13 @@ def detect_period_before_first_led_flash(ff_xs_flashes, led_xs_flashes):
     # Filter ff_xs and ff_ys to only include data before first LED flash
     pre_flash_xs = [x for x in ff_xs_flashes if x < first_led_flash]
     pre_flash_xs = np.array(pre_flash_xs)
-    min_cutoff = 0.166
+
     all_periods = np.diff(pre_flash_xs)
-    all_periods_valid = [x for x in all_periods if x > min_cutoff]
+    all_periods_valid = [x for x in all_periods if MAX_CUTOFF_PERIOD > x > MIN_CUTOFF_PERIOD]
     all_periods_valid = np.array(all_periods_valid)
 
     # If no data before LED flash, return None
-    if len(pre_flash_xs) < 3:
+    if len(all_periods_valid) < 3:
         return None
 
     pstats = {
@@ -1015,4 +1673,4 @@ def r_means(flashes, led_introduced):
                 a.append(np.mean([y for y in x]))
             r.append(np.mean([y for y in x]))
             f.append(rfl[0])
-    return b, a, r, f
+    return b, f, r, a

@@ -4,21 +4,30 @@ import os
 import pickle
 
 import matplotlib
+import matplotlib.colors as mcolors
+from collections import defaultdict
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
+import plotly.express as px
 import scipy
 import scipy.interpolate
 import seaborn as sns
 from matplotlib import cm
 from plotly.subplots import make_subplots
-from scipy import stats
+from scipy import stats, optimize
+from scipy.stats import trim_mean, sem, t
 from statsmodels.regression.linear_model import OLS
 from statsmodels.tools import add_constant
 
 import helpers
+
+
+DET_FILTER_LEVEL = 0.7
+LAM_FILTER_LEVEL = 0.7
 
 
 def boxplots(all_befores, all_afters, plot_params):
@@ -90,7 +99,518 @@ def boxplots(all_befores, all_afters, plot_params):
     plt.savefig(plot_params.save_folder + '/boxplots.png')
 
 
-def plot_recurrence(r, ax, method, t, e):
+def plot_recurrence_bouts(d, bgl):
+    bests = [
+        "20210521_770_4<br>297.549-307.62",
+        "20210522_700_8<br>185.626-197.699",
+        "20220524_500_83<br>99.6-104.567",
+        "20210523_850_12<br>255.311-266.1",
+        "20210526_600_40<br>415.008-417.859",
+        "20210521_500_47<br>170.702-177.289",
+        "20210522_700_10<br>133.984-155.078",
+        "20210525_500_38<br>279.406-292.096",
+        "20220529_400_100<br>158.467-162.8",
+        "20210525_600_32<br>325.68-334.234",
+    ]
+    worsts = [
+        "20210526_600_43<br>148.241-165.366",
+        "20220518_770_68<br>376.233-392.7",
+        "20220529_300_102<br>44.067-61.9",
+        "20220521_500_81<br>53.233-101.033",
+        "20230523_300_114<br>205.133-275.2",
+        "20210529_1000_61<br>67.734-106.136",
+        "20220526_1000_60<br>177.405-201.134",
+        "20230523_400_107<br>425.633-474.9",
+        "20220518_770_73<br>83.267-100.2",
+        "20210527_850_44<br>308.721-324.579",
+    ]
+    metrics_dict = d
+    records = []
+    for key, bouts in metrics_dict.items():
+        k = key.split('_')[1]
+        for i, m in enumerate(bouts):
+            det = m['det']
+            lam = m['lam']
+            rr = m['rr']
+            if np.isnan(det) or np.isnan(lam) or det == 0 or lam == 0:
+                continue
+            # if f"{key}<br>{round(m['start_idx'],3)}-{round(m['end_idx'],3)}" in bests:
+            #     k = 'best_10'
+            # if f"{key}<br>{round(m['start_idx'],3)}-{round(m['end_idx'],3)}" in worsts:
+            #     k = 'worst_10'
+            if m['num_flashes'] > 3:
+                records.append({
+                    "key": k,
+                    "bout": f"{round(m['start_idx'],3)}-{round(m['end_idx'],3)}",
+                    "det": det,
+                    "lam": lam,
+                    "rr": rr,
+                    "count": f"{m['num_flashes']}",
+                    "hover_label": f"{key}<br>{round(m['start_idx'],3)}-{round(m['end_idx'],3)}"
+                })
+
+    df = pd.DataFrame(records)
+
+    # Create scatter plot with hover labels
+    colors = cm.Spectral(np.linspace(0, 1, 24))  # returns RGBA
+    colors = [mcolors.to_hex(c) for c in colors]  # convert to hex strings
+    colormap = {
+        300: colors[2],
+        400: colors[5],
+        500: colors[8],
+        600: colors[11],
+        700: 'yellow',
+        770: colors[17],
+        850: colors[20],
+        1000: colors[23],
+        'best_10': 'black',
+        'worst_10': 'grey'
+    }
+    fig = px.scatter(
+        df,
+        x="det",
+        y="lam",
+        color="key",
+        hover_name="hover_label",
+        labels={"det": "Determinism (DET)", "lam": "Laminarity (LAM)"},
+        title="Determinism vs. Laminarity per Bout",
+        color_discrete_map={str(k): v for k, v in colormap.items()},
+        width=800,
+        height=600
+    )
+
+    fig.update_traces(marker=dict(size=8, opacity=0.7))
+    fig.update_layout(showlegend=False)
+    fig.write_html('figs/analysis/bout_det_vs_lam_{}bgl.html'.format(bgl))
+    print('bout vs lam written')
+
+
+def compute_confidence_interval(data, confidence=0.68):
+    if len(data) < 2:
+        return np.nan, np.nan
+    mean = np.mean(data)
+    se = sem(data)
+    h = se * t.ppf((1 + confidence) / 2., len(data) - 1)
+    return mean - h, mean + h
+
+
+def trimmed_data(data, proportiontocut=0.10):
+    data_sorted = np.sort(data)
+    n = len(data)
+    trim = int(n * proportiontocut)
+    return data_sorted[trim: n - trim] if n > 2 * trim else np.array([])
+
+
+def compute_bin_summaries(phases, shifts, num_bins=10, trim_prop=0.025):
+    bin_edges = np.linspace(0, 1, num_bins + 1)
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    trimmed_means, ci_lower, ci_upper = [], [], []
+
+    for i in range(num_bins):
+        in_bin = (phases >= bin_edges[i]) & (phases < bin_edges[i + 1])
+        if np.any(in_bin):
+            subset = trimmed_data(shifts[in_bin], proportiontocut=trim_prop)
+            if len(subset) > 1:
+                mean = np.mean(subset)
+                lo, hi = compute_confidence_interval(subset)
+            else:
+                mean, lo, hi = np.nan, np.nan, np.nan
+        else:
+            mean, lo, hi = np.nan, np.nan, np.nan
+        trimmed_means.append(mean)
+        ci_lower.append(lo)
+        ci_upper.append(hi)
+
+    return bin_centers, trimmed_means, ci_lower, ci_upper
+
+
+def bootstrap_ci(data, num_bootstrap=1000, confidence=0.68):
+    if len(data) < 2:
+        return np.nan, np.nan
+    bootstraps = np.random.choice(data, size=(num_bootstrap, len(data)), replace=True)
+    medians = np.median(bootstraps, axis=1)
+    lower = np.percentile(medians, (1 - confidence) / 2 * 100)
+    upper = np.percentile(medians, (1 + confidence) / 2 * 100)
+    return lower, upper
+
+
+def compute_bin_summaries_median(phases, shifts, num_bins=10, trim_prop=0.025):
+    bin_edges = np.linspace(0, 1, num_bins + 1)
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    medians, ci_lower, ci_upper = [], [], []
+
+    for i in range(num_bins):
+        in_bin = (phases >= bin_edges[i]) & (phases < bin_edges[i + 1])
+        if np.any(in_bin):
+            subset = trimmed_data(shifts[in_bin], proportiontocut=trim_prop)
+            if len(subset) > 1:
+                median = np.median(subset)
+                lo, hi = bootstrap_ci(subset)
+            else:
+                median, lo, hi = np.nan, np.nan, np.nan
+        else:
+            median, lo, hi = np.nan, np.nan, np.nan
+        medians.append(median)
+        ci_lower.append(lo)
+        ci_upper.append(hi)
+
+    return bin_centers, medians, ci_lower, ci_upper
+
+
+def simulate_null_model(median_response, led_period, num_bins=10, trim_prop=0.025, trials=50):
+    null_curves = []
+    for _ in range(trials):
+        firefly_times = np.cumsum(np.random.exponential(scale=1 / median_response, size=1000))
+        led_times = np.arange(0, firefly_times[-1], led_period)
+        phases, shifts = [], []
+
+        for t_led in led_times:
+            prev = firefly_times[firefly_times < t_led]
+            next_ = firefly_times[firefly_times > t_led]
+            if len(prev) == 0 or len(next_) == 0:
+                continue
+            t_prev, t_next = prev[-1], next_[0]
+            cycle = t_next - t_prev
+            if cycle == 0: continue
+            phase = (t_led - t_prev) / cycle
+            shift = (next_[0] - (t_prev + cycle)) / cycle + 1
+            if 0.5 < shift < 2.0:
+                phases.append(phase)
+                shifts.append(shift)
+
+        phases = np.array(phases)
+        shifts = np.array(shifts)
+        bin_centers, means, *_ = compute_bin_summaries(phases, shifts, num_bins=num_bins, trim_prop=trim_prop)
+        null_curves.append(means)
+
+    return bin_centers, np.nanmean(null_curves, axis=0)
+
+
+def plot_prc(bin_centers, means, ci_lo, ci_hi, raw_phases, raw_shifts, null_curve=None,
+             title="", color="purple", show=True, filename=None, scatter=False):
+    plt.figure(figsize=(6, 4))
+    err_low = np.array(means) - np.array(ci_lo)
+    err_high = np.array(ci_hi) - np.array(means)
+
+    plt.errorbar(bin_centers, means, yerr=[err_low, err_high],
+                 fmt='o-', capsize=3, color=color, label='Mean ± CI')
+
+    for i, center in enumerate(bin_centers):
+        in_bin = (raw_phases >= center - 0.05) & (raw_phases < center + 0.05)
+        if np.any(in_bin):
+            jittered_x = center + np.random.normal(0, 0.005, np.sum(in_bin))
+            if scatter:
+                plt.scatter(jittered_x, raw_shifts[in_bin], color='black', alpha=0.2, s=6)
+
+    if null_curve is not None:
+        plt.plot(bin_centers, null_curve, linestyle='--', color='gray', label='Null model')
+
+    plt.title(title)
+    plt.xlabel("Normalized Phase (0–1)")
+    plt.ylabel("Phase Shift")
+    plt.grid(True)
+    ymin = np.nanmin([*ci_lo] + ([] if null_curve is None else list(null_curve))) - 0.05
+    ymax = np.nanmax([*ci_hi] + ([] if null_curve is None else list(null_curve))) + 0.05
+    plt.ylim(ymin, ymax)
+    plt.legend()
+    plt.tight_layout()
+    if filename:
+        plt.savefig(filename)
+        plt.close()
+    elif show:
+        plt.show()
+
+
+def process_treatment_data(results, flter):
+    grouped = defaultdict(lambda: {"phases": [], "shifts": [], "responses": []})
+
+    threshold = None
+    if flter == 'DET+LAM*BOUT_LENGTH':
+        all_scores = [
+            res['det'] + res['lam'] * res['num_flashes']
+            for k in results
+            for res in results[k]
+        ]
+        threshold = np.percentile(all_scores, 90)
+
+    for k, reslist in results.items():
+        for res in reslist:
+            key = k.split('_')[1]
+            max_phase = float(key) / 1000
+            if res['num_flashes'] < 5:
+                continue
+            if flter == 'DET_LAM' and not (res["lam"] > LAM_FILTER_LEVEL or res["det"] > DET_FILTER_LEVEL):
+                continue
+            if flter == 'DET' and not (res["det"] > DET_FILTER_LEVEL):
+                continue
+            if flter == 'LAM' and not (res["lam"] > LAM_FILTER_LEVEL):
+                continue
+            if flter == 'PERIOD_DIFF' and abs(res['prior_period'] - max_phase) > res['prior_period'] / 2:
+                continue
+            if flter == 'DET+LAM*BOUT_LENGTH':
+                score = res['det'] + res['lam'] * res['num_flashes']
+                if score < threshold:
+                    continue
+
+            grouped[key]["phases"].extend(res["phases"])
+            grouped[key]["shifts"].extend(res["shifts"])
+            grouped[key]["responses"].extend(res["responses"])
+
+    return grouped
+
+
+def plot_individual_treatment_prcs(results, flter=False, bout_gap_length=2.0):
+    grouped = process_treatment_data(results, flter)
+    for key, data in grouped.items():
+        try:
+            phase_max = float(key) / 1000
+        except ValueError:
+            continue
+        shifts = np.array(data["shifts"])
+        phases = np.array(data["phases"]) / phase_max
+        responses = np.array(data["responses"])
+        valid = (shifts > 0.5) & (shifts < 2.0)
+        if np.sum(valid) < 10:
+            continue
+
+        shifts, phases = shifts[valid], phases[valid]
+        bin_centers, means, ci_lo, ci_hi = compute_bin_summaries(phases, shifts)
+        _, null_curve = simulate_null_model(np.median(responses), 1.0 / (1000 / float(key)))
+
+        suffix = "_filtered_by_{}".format(flter) if flter else ""
+        plot_prc(
+            bin_centers, means, ci_lo, ci_hi,
+            raw_phases=phases, raw_shifts=shifts, null_curve=null_curve,
+            title=f"Normalized PRC — Key {key}",
+            filename=f"figs/analysis/{bout_gap_length}bgl_prc_{key}{suffix}.png",
+            scatter=True
+        )
+
+
+def plot_individual_treatment_responses(results, flter=False, bout_gap_length=2.0):
+    grouped = process_treatment_data(results, flter)
+    for key, data in grouped.items():
+        try:
+            phase_max = float(key) / 1000
+        except ValueError:
+            continue
+        shifts = np.array(data["shifts"])
+        phases = np.array(data["phases"]) / phase_max
+        responses = np.array(data["responses"])
+        valid = (shifts > 0.5) & (shifts < 2.0)
+        if np.sum(valid) < 10: continue
+
+        responses, phases = responses[valid], phases[valid]
+        bin_centers, means, ci_lo, ci_hi = compute_bin_summaries_median(phases, responses)
+
+        suffix = "_filtered_by_{}".format(flter) if flter else ""
+        plot_prc(
+            bin_centers, means, ci_lo, ci_hi,
+            raw_phases=phases, raw_shifts=responses, null_curve=None,
+            title=f"Normalized PRC — Key {key}",
+            filename=f"figs/analysis/{bout_gap_length}bgl_prc_response_{key}{suffix}.png",
+            scatter=True
+        )
+
+
+def plot_grand_prc(results, flter=False, bout_gap_length=2.0):
+    all_phases, all_shifts = [], []
+    threshold = None
+    if flter == 'DET+LAM*BOUT_LENGTH':
+        all_scores = [
+            res['det'] + res['lam'] * res['num_flashes']
+            for reslist in results.values()
+            for res in reslist
+            if 'det' in res and 'lam' in res and 'num_flashes' in res
+        ]
+        threshold = np.percentile(all_scores, 90)
+
+    for k, reslist in results.items():
+        for res in reslist:
+            key = k.split('_')[1]
+            max_phase = float(key) / 1000
+
+            if res['num_flashes'] < 5:
+                continue
+            if flter == 'DET_LAM' and not (res["lam"] > LAM_FILTER_LEVEL or res["det"] > DET_FILTER_LEVEL):
+                continue
+            if flter == 'DET' and not (res["det"] > DET_FILTER_LEVEL):
+                continue
+            if flter == 'LAM' and not (res["lam"] > LAM_FILTER_LEVEL):
+                continue
+            if flter == 'PERIOD_DIFF' and abs(res['prior_period'] - max_phase) > res['prior_period'] / 2:
+                continue
+            if flter == 'DET+LAM*BOUT_LENGTH':
+                score = res['det'] + res['lam'] * res['num_flashes']
+                if score < threshold:
+                    continue
+
+            all_phases.extend([p / max_phase for p in res["phases"]])
+            all_shifts.extend(res["shifts"])
+
+    shifts = np.array(all_shifts)
+    phases = np.array(all_phases)
+    valid = (shifts > 0.5) & (shifts < 2.0)
+    if np.sum(valid) < 10: return
+
+    shifts, phases = shifts[valid], phases[valid]
+    bin_centers, means, ci_lo, ci_hi = compute_bin_summaries(phases, shifts)
+    plot_prc(
+        bin_centers, means, ci_lo, ci_hi,
+        raw_phases=phases, raw_shifts=shifts, null_curve=None,
+        title="Normalized Grand PRC" + (" (Filtered)" if flter else ""),
+        filename=f"figs/analysis/{bout_gap_length}bgl_prc_grand{'_filtered' if flter else ''}.png",
+        scatter=False
+    )
+
+
+def plot_combined_prc(results, flter=False, bout_gap_length=2.0):
+    grouped = process_treatment_data(results, flter)
+    plt.figure(figsize=(10, 8))
+    treatment_keys = sorted(grouped.keys(), key=lambda x: int(x))
+    colors = plt.get_cmap('Spectral')(np.linspace(0, 1, len(treatment_keys)))
+    all_lines = []
+
+    for i, (color, key) in enumerate(zip(colors, treatment_keys)):
+        data = grouped[key]
+        try:
+            phase_max = float(key) / 1000
+        except ValueError:
+            continue
+        shifts = np.array(data["shifts"])
+        phases = np.array(data["phases"]) / phase_max
+        valid = (shifts > 0.5) & (shifts < 2.0)
+        if np.sum(valid) < 10: continue
+        shifts, phases = shifts[valid], phases[valid]
+        bin_centers, means, *_ = compute_bin_summaries(phases, shifts)
+        plt.plot(bin_centers, means, label=f"Key {key}", color=color, linewidth=2)
+        all_lines.append((bin_centers, means))
+
+    plot_grand = True
+    if plot_grand:
+        all_phases, all_shifts = [], []
+        threshold = None
+        if flter == 'DET+LAM*BOUT_LENGTH':
+            all_scores = [
+                res['det'] + res['lam'] * res['num_flashes']
+                for reslist in results.values()
+                for res in reslist
+                if 'det' in res and 'lam' in res and 'num_flashes' in res
+            ]
+            threshold = np.percentile(all_scores, 90)
+
+        for k, reslist in results.items():
+            for res in reslist:
+                key = k.split('_')[1]
+                max_phase = float(key) / 1000
+
+                if res['num_flashes'] < 5:
+                    continue
+                if flter == 'DET_LAM' and not (res["lam"] > LAM_FILTER_LEVEL or res["det"] > DET_FILTER_LEVEL):
+                    continue
+                if flter == 'DET' and not (res["det"] > DET_FILTER_LEVEL):
+                    continue
+                if flter == 'LAM' and not (res["lam"] > LAM_FILTER_LEVEL):
+                    continue
+                if flter == 'PERIOD_DIFF' and abs(res['prior_period'] - max_phase) > res['prior_period'] / 2:
+                    continue
+                if flter == 'DET+LAM*BOUT_LENGTH':
+                    score = res['det'] + res['lam'] * res['num_flashes']
+                    if score < threshold:
+                        continue
+
+                all_phases.extend([p / max_phase for p in res["phases"]])
+                all_shifts.extend(res["shifts"])
+        shifts = np.array(all_shifts)
+        phases = np.array(all_phases)
+        valid = (shifts > 0.5) & (shifts < 2.0)
+        shifts, phases = shifts[valid], phases[valid]
+        bin_centers, means, *_ = compute_bin_summaries(phases, shifts)
+        plt.plot(bin_centers, means, color='black', linewidth=4, label="Grand Mean")
+
+    plt.title("Combined PRC: Grand + All Treatments")
+    plt.xlabel("Normalized Phase (0–1)")
+    plt.ylabel("Phase Shift")
+    plt.grid(True)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    suffix = "_filtered_by_{}".format(flter) if flter else ""
+    plt.savefig(f"figs/analysis/{bout_gap_length}_bgl_prc_combined{suffix}.png")
+    plt.close()
+
+
+def plot_prc_by_key(results, bgl):
+    for flter in [False, 'DET_LAM', 'PERIOD_DIFF', 'DET', 'LAM', 'DET+LAM*BOUT_LENGTH']:
+        plot_individual_treatment_prcs(results, flter, bgl)
+        plot_individual_treatment_responses(results, flter, bgl)
+        plot_grand_prc(results, flter, bgl)
+        plot_combined_prc(results, flter, bgl)
+
+
+def plot_recurrence_stats(d):
+    metrics_dict_s = d
+    fig, ax = plt.subplots()
+    colors = cm.Spectral(np.linspace(0, 1, 24))  # Spectral colormap with 8 colors
+
+    colormap = {
+        300: colors[2],
+        400: colors[5],
+        500: colors[8],
+        600: colors[11],
+        700: 'yellow',
+        770: colors[17],
+        850: colors[20],
+        1000: colors[23],
+    }
+    bests = ['20210527_500_47', '20210525_600_34',
+             '20210528_850_53', '20210521_770_4', '20210522_700_10',
+             '20210526_600_40', '20210521_770_5',
+             '20220524_500_83', '20210522_700_10', '20210522_700_8']
+    worsts = ['20220526_600_86', '20210526_600_43',
+             '20210525_700_37', '20220518_770_73', '20210527_850_44',
+             '20220526_1000_88', '20220529_400_99', '20220529_300_102',
+             '20230523_400_109', '20220518_600_69']
+    seen = {
+        300: False,
+        400: False,
+        500: False,
+        600: False,
+        700: False,
+        770: False,
+        850: False,
+        1000: False,
+        'best_10': False,
+        'worst_10': False
+    }
+    for k in metrics_dict_s.keys():
+        key = int(k.split('_')[1])
+        if k in bests:
+            color = 'black'
+            size = 9
+            key = 'best_10'
+        elif k in worsts:
+            color = 'grey'
+            size = 3
+            key = 'worst_10'
+        else:
+            color = colormap[key]
+            size = 6
+        if seen[key]:
+            ax.scatter(metrics_dict_s[k][1], metrics_dict_s[k][2], color=color, s=size)
+        else:
+            ax.scatter(metrics_dict_s[k][1], metrics_dict_s[k][2],
+                       color=color, s=size, label=key)
+            seen[key] = True
+    ax.set_xlabel('Determinism of recurrence matrix')
+    ax.set_ylabel('Laminarity of recurrence matrix')
+    ax.legend()
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.savefig('figs/analysis/recurrence_stats.png')
+    plt.close()
+
+
+def plot_recurrence(r, ax, method, t, e, metrics):
     """
     Visualize the recurrence plot.
 
@@ -98,11 +618,26 @@ def plot_recurrence(r, ax, method, t, e):
     -----------
     - r: Binary matrix representing recurrence points
     - ax: axes on which to plot
+    - method: method used
+    - t: tau for the embedding
+    - e: embedding dimension
+    - metrics: recurrence rate, determinism, and laminarity of the matrix
     """
-    if t is not None:
-        title_string = 'Recurrence Plot from {}: Tau = {}, embedding dim = {}'.format(method, t, e)
+    if metrics is not None:
+        rr = round(metrics[0], 3)
+        det = round(metrics[1], 3)
+        lam = round(metrics[2], 3)
+        rpde = round(metrics[3], 3)
     else:
-        title_string = 'Recurrence Plot from {}'.format(method)
+        rr = 'n/a'
+        det = 'n/a'
+        lam = 'n/a'
+        rpde = 'n/a'
+    if t is not None:
+        title_string = 'Recurrence Plot from {}: Tau = {}, embedding dim = {}\n{}rr, {}det, {}lam, {}rpde'.format(
+            method, t, e, rr, det, lam, rpde)
+    else:
+        title_string = 'Recurrence Plot from {}, {}rr, {}det, {}lam, {}rpde'.format(method, rr, det, lam, rpde)
     cax = ax.imshow(r, cmap='binary', origin='lower')
     ax.set_title(title_string)
     ax.set_xlabel('Time Index')
@@ -268,6 +803,29 @@ def plot_poincare(phases, title):
     plt.close()
 
 
+def plot_autocorrelation(phases, title):
+    """
+    Create an autocorrelation plot of phase differences.
+
+    Parameters:
+    - phases  list of consecutive phase differences
+    - title: figtitle
+    """
+    # Convert to numpy array if not already
+    phase_diff = np.array(phases)
+    autocorrelation = helpers.circular_autocorrelation(phase_diff)
+    lags = np.arange(1, len(autocorrelation) + 1)
+
+    plt.figure(figsize=(6, 6))
+    plt.plot(lags, autocorrelation, marker='o')
+    plt.xlabel("Lag")
+    plt.ylabel("Circular Autocorrelation Magnitude")
+    plt.title("Circular Autocorrelation of Phase Differences")
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.savefig(title)
+    plt.close()
+
+
 def plot_alpha_vs_dist_period(dist_ps, alphas, keys):
     fig, ax = plt.subplots()
     xs = dist_ps
@@ -284,11 +842,15 @@ def plot_alpha_vs_dist_period(dist_ps, alphas, keys):
 
 
 def write_timeseries_figs(pargs):
+    keys = ['300', '400', '500', '600', '700', '770', '850', '1000']
     #
     # Write the timeseries figures path objects
     # Interactive timeseries plots for any given day - the raw data
-
+    p_hases = {k: [] for k in keys}
+    s_hifts = {k: [] for k in keys}
     fpaths = os.listdir(pargs.data_path)
+    all_fits = {key: [] for key in keys}
+
     for fp in fpaths:
         path, framerate = check_frame_rate(pargs.data_path + '/' + fp)
         if path is None:
@@ -327,16 +889,19 @@ def write_timeseries_figs(pargs):
                 _, _, pairs, period = helpers.compute_phase_response_curve(
                     time_series_led=led_xs_flashes,
                     time_series_ff=ff_xs_flashes,
-                    epsilon=0.035,  # one frame
-                    do_responses_relative_to_ff=pargs.do_ffrt
+                    epsilon=0.08,
+                    m=float(key)/1000,
+                    do_responses_relative_to_ff=pargs.do_ffrt,
+                    only_lookback=pargs.re_norm
                 )
                 if period is None:
                     ff_period = 'N/A'
+                    print('ff period is N/A prior to LED in {}-{}-{} exp'.format(date, key, index))
                 else:
                     ff_period = period['period_estimate']
-                    ff_period = f"{ff_period * 1000:.4f}"
+                    ff_period = f"{round(ff_period * 1000)}"
 
-                times, phases, responses = zip(*[(t, p, r) for p, r, t in pairs])
+                times, phases, responses, shifts = zip(*[(t, p, r, s) for p, r, s, t in pairs])
                 if pargs.re_norm:
                     phases = helpers.renorm_phases(phases)
 
@@ -386,7 +951,7 @@ def write_timeseries_figs(pargs):
                 trace2_baseline = go.Scatter(x=[x_min, x_max], y=[0, 0], mode='lines',
                                              line=dict(color='blue', dash='dash', width=1), showlegend=False)
 
-                if period:
+                if period.get('periods'):
                     p_xs = period['periods'][0]
                     p_ys = period['periods'][1]
                     xtimes = [*p_xs, *times]
@@ -417,6 +982,7 @@ def write_timeseries_figs(pargs):
                     name='Phase Second Derivative ([1/s^2])',
                     line=dict(color='blue', width=2, dash='dash')  # Dashed line for distinction
                 )
+
                 fig = make_subplots(rows=4, cols=1,
                                     shared_xaxes=True,
                                     vertical_spacing=0.08,  # Reduced spacing between subplots
@@ -478,40 +1044,190 @@ def write_timeseries_figs(pargs):
                 }
 
                 fig_html = pio.to_html(fig, full_html=False, include_plotlyjs=False, config=config)
-                html_content = f"""
-                                <html>
-                                <head>
-                                    <title>Timeseries Analysis</title>
-                                    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-                                    <style>
-                                        body {{ 
-                                            font-family: Arial, sans-serif; 
-                                            text-align: center;
-                                            display: flex;
-                                            justify-content: center;
-                                            align-items: center;
-                                            flex-direction: column;
-                                            margin: 0;
-                                            padding: 0;
-                                            min-height: 100vh;
-                                        }}
-                                        h1 {{ color: #333; }}
-                                        .figure-container {{ 
-                                            margin: 20px auto;
-                                            width: 800px;
-                                            height: 1200px;
-                                            display: flex;
-                                            justify-content: center;
-                                        }}
-                                    </style>
-                                </head>
-                                <body>
-                                    <div class="figure-container">
-                                        {fig_html}
-                                    </div>
-                                </body>
-                                </html>
-                                """
+
+                # PRC
+                from collections import defaultdict
+                shift_sums = defaultdict(lambda: [0, 0])  # [sum of shifts, count]
+
+                # Aggregate shifts per phase
+                for p, s in zip(phases, shifts):
+                    p = round(p, 6)
+                    if helpers.MIN_CUTOFF_PERIOD <= s <= helpers.MAX_CUTOFF_PERIOD:
+                        shift_sums[p][0] += s
+                        shift_sums[p][1] += 1
+
+                # Compute averages
+                to_plot_phase_avgs = []
+                to_plot_shift_avgs = []
+
+                for p, (shift_sum, count) in shift_sums.items():
+                    to_plot_phase_avgs.append(p)
+                    to_plot_shift_avgs.append(shift_sum / count)
+
+                p_hases[key].extend(to_plot_phase_avgs)
+                s_hifts[key].extend(to_plot_shift_avgs)
+
+                to_plot_phases = []
+                to_plot_shifts = []
+                for p, s in zip(phases, shifts):
+                    if helpers.MIN_CUTOFF_PERIOD <= s <= helpers.MAX_CUTOFF_PERIOD:
+                        to_plot_phases.append(p)
+                        to_plot_shifts.append(s)
+                if len(to_plot_shifts) > 3:
+                    phase_response_trace = go.Scatter(
+                        x=to_plot_phases,
+                        y=to_plot_shifts,
+                        mode='markers',
+                        name='Phase response curve',
+                        marker=dict(color='orange', size=5)
+
+                    )
+                    phase_response_trace_2 = go.Scatter(
+                        x=to_plot_phase_avgs,
+                        y=to_plot_shift_avgs,
+                        mode='markers',
+                        name='Avg Phase response curve',
+                        marker=dict(color='gray', size=7)
+
+                    )
+                    phase_response_baseline = go.Scatter(x=[0.0, float(key)/1000],
+                                                         y=[1.0, 1.0], mode='lines',
+                                                         line=dict(color='blue', dash='dash', width=1),
+                                                         showlegend=False)
+                    fig2 = make_subplots(rows=1, cols=1,
+                                         vertical_spacing=0.08,
+                                         subplot_titles=["Phase response curve"])
+                    fig2.add_trace(phase_response_trace, row=1, col=1)
+                    fig2.add_trace(phase_response_baseline, row=1, col=1)
+                    fig2.add_trace(phase_response_trace_2, row=1, col=1)
+
+                    fig2.update_layout(
+                        height=400,
+                        width=800,
+                        showlegend=True,
+                        xaxis=dict(range=[0.0, float(key)/1000]),
+
+                        yaxis=dict(
+                            title="Percent of period response",
+                            range=[0.0, 2.75]
+                        ),
+                        margin=dict(t=180, l=80, r=80, b=80),
+                    )
+                    fig2.update_xaxes(title_text="Phase difference (s)", row=1, col=1, showticklabels=True)
+
+                    config2 = {
+                        'scrollZoom': True,
+                        'displayModeBar': True,
+                        'editable': False,
+                        'toImageButtonOptions': {
+                            'format': 'png',
+                            'filename': f'{date}_{key}_{index}',
+                            'height': 400,
+                            'width': 800,
+                            'scale': 2
+                        }
+                    }
+                    fig2_html = pio.to_html(fig2, full_html=False, include_plotlyjs=False, config=config2)
+
+                    html_content = f"""
+                                    <html>
+                                    <head>
+                                        <title>Timeseries Analysis</title>
+                                        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+                                        <style>
+                                            body {{ 
+                                                font-family: Arial, sans-serif; 
+                                                text-align: center;
+                                                display: flex;
+                                                justify-content: center;
+                                                align-items: center;
+                                                flex-direction: column;
+                                                margin: 0;
+                                                padding: 0;
+                                                min-height: 100vh;
+                                            }}
+                                            h1 {{ color: #333; }}
+                                            .figure-container {{ 
+                                                margin: 20px auto;
+                                                width: 800px;
+                                                height: 1200px;
+                                                display: flex;
+                                                justify-content: center;
+                                            }}
+                                            .figure-container-2 {{ 
+                                                margin: 20px auto;
+                                                width: 800px;
+                                                height: 400px;
+                                                display: flex;
+                                                justify-content: center;
+                                            }}
+                                        </style>
+                                    </head>
+                                    <body>
+                                        <div class="figure-container">
+                                            {fig_html}
+                                        </div>
+                                        <div class="figure-container-2">
+                                            {fig2_html}
+                                        </div>
+                                    </body>
+                                    </html>
+                                    """
+
+                    # aggregate PRC
+                    fit_y = helpers.fit_prc(to_plot_phase_avgs, to_plot_shift_avgs, date, key, index)
+                    is_always_positive = True
+                    for fy in fit_y:
+                        if fy < 0:
+                            is_always_positive = False
+                        elif fy > 3.0:
+                            is_always_positive = False
+
+                    if is_always_positive:
+                        all_fits[key].append(fit_y)
+
+                else:
+                    html_content = f"""
+                                                        <html>
+                                                        <head>
+                                                            <title>Timeseries Analysis</title>
+                                                            <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+                                                            <style>
+                                                                body {{ 
+                                                                    font-family: Arial, sans-serif; 
+                                                                    text-align: center;
+                                                                    display: flex;
+                                                                    justify-content: center;
+                                                                    align-items: center;
+                                                                    flex-direction: column;
+                                                                    margin: 0;
+                                                                    padding: 0;
+                                                                    min-height: 100vh;
+                                                                }}
+                                                                h1 {{ color: #333; }}
+                                                                .figure-container {{ 
+                                                                    margin: 20px auto;
+                                                                    width: 800px;
+                                                                    height: 1200px;
+                                                                    display: flex;
+                                                                    justify-content: center;
+                                                                }}
+                                                                .figure-container-2 {{ 
+                                                                    margin: 20px auto;
+                                                                    width: 800px;
+                                                                    height: 400px;
+                                                                    display: flex;
+                                                                    justify-content: center;
+                                                                }}
+                                                            </style>
+                                                        </head>
+                                                        <body>
+                                                            <div class="figure-container">
+                                                                {fig_html}
+                                                            </div>
+                                                        </body>
+                                                        </html>
+                                                        """
 
                 if pargs.do_ffrt:
                     if not pargs.re_norm:
@@ -583,6 +1299,48 @@ def write_timeseries_figs(pargs):
                     key, date, key, index)
                 )
 
+    plot_aggregate_fitted_prc(all_fits)
+
+
+def plot_aggregate_fitted_prc(allfits):
+    ps_fig, ps_ax = plt.subplots()
+    colormap = {
+        '300': 'darkred',
+        '400': 'red',
+        '500': 'orange',
+        '600': 'yellow',
+        '700': 'mediumseagreen',
+        '770': 'royalblue',
+        '850': 'turquoise',
+        '1000': 'blueviolet'
+    }
+    mean_fits_collection = []
+    fit_x = np.linspace(0.0, 1.0, 200)
+
+    for key in allfits.keys():
+        af = np.array(allfits[key])  # Shape: (num_keys, len(fit_x))
+
+        mean_fit = np.mean(af, axis=0)
+        std_fit = np.std(af, axis=0)
+        mean_fits_collection.append(mean_fit)
+
+        ps_ax.plot(fit_x, mean_fit, linewidth=2.5, color=colormap[key], alpha=1.0,
+                   label='Mean PRC: LED_Period={}ms'.format(key), zorder=3)
+
+    grand_mean_fit = np.mean(mean_fits_collection, axis=0)
+    ps_ax.plot(fit_x, grand_mean_fit, color='black', linewidth=2, linestyle='--',
+               label='Grand Mean PRC', zorder=4)
+    ps_ax.set_xlabel('Phase difference [s]', fontsize=14, labelpad=10)
+    ps_ax.set_ylabel('Phase shift', fontsize=14, labelpad=10)
+    ps_ax.set_title('Phase response curve for Photuris frontalis', fontsize=16, pad=20)
+    ps_ax.set_xlim([0.0, 1.0])
+    ps_ax.axhline(1.0, linestyle='dotted', linewidth=1.5, color='black', zorder=1)
+    ps_ax.legend(fontsize=6, loc='upper left', frameon=False, title='PRC by LED Period',
+                 bbox_to_anchor=(1.02, 1), borderaxespad=0, ncol=1)
+    ps_ax.grid(True, linestyle='--', alpha=0.7, zorder=0)
+    plt.savefig('figs/analysis/all_prc.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
 
 def plot_statistics(rmses, ks, plot_params):
     all_befores = {}
@@ -603,17 +1361,12 @@ def plot_statistics(rmses, ks, plot_params):
                 except TypeError:
                     all_delays.append(delays)
 
-            # Calculate mean and standard deviation
             mu = np.mean(all_delays)
             sigma = np.std(all_delays)
-
-            # Generate Gaussian distribution
             gaussian = stats.norm.pdf(x, mu, sigma / 2)
 
             axes[i].spines['top'].set_visible(False)
             axes[i].spines['right'].set_visible(False)
-
-            # Plot the Gaussian
             if i == 4:
                 color = 'yellow'
             else:
@@ -991,6 +1744,34 @@ def plot_statistics(rmses, ks, plot_params):
         plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_2024_before_nolines')
         plt.close(fig)
 
+        fig, axes = plt.subplots(2, figsize=(8, 6))
+        bout_lengths_before = []
+        bout_lengths_after = []
+        bout_vars_before = []
+        bout_vars_after = []
+        for i, k in enumerate(ks):
+            for div in rmses['bouts_before'][k]:
+                bout_lengths_before.append(div[0])
+                bout_vars_before.append(div[1])
+        for i, k in enumerate(ks):
+            for ind in rmses['bouts_after'][k]:
+                bout_lengths_after.append(ind[0])
+                bout_vars_after.append(ind[1])
+
+        axes[0].hist(bout_lengths_before, density=True, bins=np.arange(0.0, 100, 1.0),
+                     color='black', alpha=0.25, label='Before')
+        axes[0].hist(bout_lengths_after, density=True, bins=np.arange(0.0, 100, 1.0),
+                     color='green', alpha=0.25, label='After')
+        axes[1].hist(bout_vars_before, density=True, bins=np.arange(0.0, 1.00, 0.01), color='black', alpha=0.25)
+        axes[1].hist(bout_vars_after, density=True, bins=np.arange(0.0, 1.00, 0.01), color='green', alpha=0.25)
+
+        axes[0].set_xlabel('Bout length (flashes)')
+        axes[1].set_xlabel('Bout interflash variance [s]')
+        axes[0].legend()
+
+        plt.savefig(plot_params.save_folder + '/bout_statistics')
+        plt.close(fig)
+
         # fig 1b
         fig, axes = plt.subplots()
         all_before = []
@@ -1013,6 +1794,87 @@ def plot_statistics(rmses, ks, plot_params):
         axes.set_ylabel('pdf')
         plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_before_aggregate_all2024')
         plt.close(fig)
+
+        fig, axes = plt.subplots()
+        all_before = []
+        all_befores = {}
+        for i, k in enumerate(ks):
+            all_befores[k] = []
+            for individual in rmses['windowed_period_after'][k]:
+                try:
+                    all_befores[k].extend(individual)
+                    all_before.extend(individual)
+                except TypeError:
+                    all_before.append(individual)
+                    all_befores[k].append(individual)
+        axes.hist(all_before, density=True, bins=np.arange(0.0, 2.0, 0.03), color='black', alpha=0.25)
+        axes.spines['top'].set_visible(False)
+        axes.spines['right'].set_visible(False)
+        axes.set_xlim(0.0, 1.5)
+        axes.set_ylim(0.0, 6.0)
+        axes.set_xlabel('T[s]')
+        axes.set_ylabel('pdf')
+        plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_after_aggregate_all')
+        plt.close(fig)
+
+        # variance before and after
+        sns.set(style='whitegrid', context='talk')
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        x_labels = []
+        x_positions = {}
+        k_sorted = sorted(ks)
+
+        for i, k in enumerate(k_sorted):
+            x_labels.extend([f'{k}\nBefore', f'{k}\nAfter'])
+            x_positions[(k, 'Before')] = i * 2
+            x_positions[(k, 'After')] = i * 2 + 1
+
+        color_map = sns.color_palette("husl", len(k_sorted))
+
+        for i, k in enumerate(k_sorted):
+            individual_idx = 0
+            befores = rmses['individual_before'][k]
+            afters = rmses['individual_after'][k]
+
+            for before, after in zip(befores, afters):
+                try:
+                    var_before = np.var(before)
+                except TypeError:
+                    var_before = np.nan
+
+                try:
+                    var_after = np.var(after)
+                except TypeError:
+                    var_after = np.nan
+
+                if np.isnan(var_before) or np.isnan(var_after):
+                    continue
+
+                x_b = x_positions[(k, 'Before')]
+                x_a = x_positions[(k, 'After')]
+
+                if var_before > var_after:
+                    print(i, k)
+                ax.plot([x_b, x_a], [var_before, var_after], color=color_map[i], alpha=0.6, linewidth=1)
+                ax.scatter([x_b, x_a], [var_before, var_after], color=color_map[i], s=30,
+                           label=f'k={k}' if individual_idx == 0 else None)
+                individual_idx += 1
+
+        ax.set_xticks([x_positions[key] for key in x_positions])
+        ax.set_xticklabels(x_labels, rotation=45)
+        ax.set_ylabel('Variance of T [s]')
+        ax.set_title('Windowed period variance before and after per individual, grouped by k')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        # Add legend
+        handles, labels = ax.get_legend_handles_labels()
+        ax.legend(handles, labels, loc='best')
+
+        plt.tight_layout()
+        plt.savefig(plot_params.save_folder + '/LED_variance_dumbbell_by_k_colored2024.png')
+        plt.close()
 
     if plot_params.do_windowed_period_plot:
         fig, axes = plt.subplots(len(ks))
