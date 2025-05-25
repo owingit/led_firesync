@@ -15,6 +15,43 @@ MIN_CUTOFF_PERIOD = 0.25
 MAX_CUTOFF_PERIOD = 2.5
 
 
+def get_bout_cout_variance(f):
+    """
+    Get the count and variance of a bout (consecutive flashes w/o a dropout stoppage)
+
+    Parameters:
+    - f: list of flash timings
+
+    Returns:
+    - bouts: list of (count, flash variance) tuples
+    """
+    if not f:
+        return []
+
+    f = sorted(f)
+    bouts = []
+    current_bout = [f[0]]
+
+    for i in range(1, len(f)):
+        gap = f[i] - f[i - 1]
+        if gap <= 2.0:
+            current_bout.append(f[i])
+        else:
+            if len(current_bout) > 2:
+                interflash_times = np.diff(current_bout)
+                variance = np.var(interflash_times)
+                bouts.append((len(current_bout), variance))
+            current_bout = [f[i]]
+
+    # Handle the final bout
+    if len(current_bout) > 2:
+        interflash_times = np.diff(current_bout)
+        variance = np.var(interflash_times)
+        bouts.append((len(current_bout), variance))
+
+    return bouts
+
+
 def improved_circular_normalize(delays, led_period):
     """
     Improved circular normalization using known LED period
