@@ -842,16 +842,21 @@ def plot_alpha_vs_dist_period(dist_ps, alphas, keys):
 
 
 def write_timeseries_figs(pargs):
-    keys = ['300', '400', '500', '600', '700', '770', '850', '1000']
-    #
+    #####
     # Write the timeseries figures path objects
     # Interactive timeseries plots for any given day - the raw data
+    #####
+    keys = ['300', '400', '500', '600', '700', '770', '850', '1000']
     p_hases = {k: [] for k in keys}
     s_hifts = {k: [] for k in keys}
     fpaths = os.listdir(pargs.data_path)
     all_fits = {key: [] for key in keys}
+    all_derivs = {key: [] for key in keys}
+    all_phases = {key: [] for key in keys}
 
     for fp in fpaths:
+        if fp == '.DS_Store':
+            continue
         path, framerate = check_frame_rate(pargs.data_path + '/' + fp)
         if path is None:
             continue
@@ -910,6 +915,8 @@ def write_timeseries_figs(pargs):
                 valid_indices = [i for i, val in enumerate(phase_derivative) if val is not None]
                 valid_times = [times[i] for i in valid_indices]
                 valid_derivatives = [phase_derivative[i] for i in valid_indices]
+                all_derivs[key].append(valid_derivatives)
+
                 phase_acceleration = helpers.sliding_time_window_derivative(valid_times, valid_derivatives,
                                                                             window_seconds=3.0)
                 valid_indices_2nd = [i for i, val in enumerate(phase_acceleration) if val is not None]
@@ -947,6 +954,7 @@ def write_timeseries_figs(pargs):
                     name='Phase Differences',
                     line=dict(color='black', width=1, dash='solid')
                 )
+                all_phases[key].append(phases)
 
                 trace2_baseline = go.Scatter(x=[x_min, x_max], y=[0, 0], mode='lines',
                                              line=dict(color='blue', dash='dash', width=1), showlegend=False)
@@ -1300,6 +1308,102 @@ def write_timeseries_figs(pargs):
                 )
 
     plot_aggregate_fitted_prc(all_fits)
+    plot_aggregate_phase_derivatives(all_derivs, all_phases)
+
+
+def plot_aggregate_phase_derivatives(allderivs, all_phases):
+    ks = sorted(allderivs.keys(), reverse=True)
+    num_bins = 71
+    CHANGE_TOLERANCE = 1e-6
+    all_flat_filtered_derivs = []
+    filtered_derivs_by_group = {}
+    for key in ks:
+        derivs_of_sublists = allderivs[key]
+        current_group_filtered_derivs = []
+        for sublist in derivs_of_sublists:
+            # Apply the filtering logic to the current sublist
+            # Now iterate up to len(sublist) - 2 to allow checking i, i+1, and i+2
+            for i in range(len(sublist) - 2):
+                # Check if sublist[i] is stable with sublist[i+1]
+                # AND if sublist[i+1] is stable with sublist[i+2]
+                if (abs(sublist[i] - sublist[i + 1]) <= CHANGE_TOLERANCE and
+                        abs(sublist[i + 1] - sublist[i + 2]) <= CHANGE_TOLERANCE):
+                    current_group_filtered_derivs.append(sublist[i])
+
+        filtered_derivs_by_group[key] = current_group_filtered_derivs
+        all_flat_filtered_derivs.extend(current_group_filtered_derivs)
+
+    bin_min, bin_max = -0.5, 0.5
+    bins = np.linspace(bin_min, bin_max, num_bins + 1)
+    ps_fig, ps_ax = plt.subplots(len(ks), figsize=(10, 8), sharex=True)
+    colormap = cm.get_cmap('Spectral', len(ks) * 3)
+
+    max_height = 0
+    # First pass: get max height with uniform bins (using filtered data)
+    for key in ks:
+        filtered_derivs = filtered_derivs_by_group[key]
+        if filtered_derivs:
+            counts, _ = np.histogram(filtered_derivs, bins=bins, density=True)
+            max_height = max(max_height, counts.max())
+
+    # Second pass: plot with uniform bins and y limit (using filtered data)
+    for i, key in enumerate(ks):
+        filtered_derivs = filtered_derivs_by_group[key]
+        current_ax = ps_ax[i] if len(ks) > 1 else ps_ax
+        color = 'yellow' if i == 4 else colormap(i * 3)
+        if filtered_derivs:
+            current_ax.hist(filtered_derivs, bins=bins, alpha=0.6, color=color, edgecolor='black', linewidth=0.5,
+                            density=True)
+
+        current_ax.set_ylim(0, max_height * 1.1)
+        current_ax.set_xlim(bin_min, bin_max)
+
+        if i != len(ks) - 1:
+            current_ax.xaxis.set_visible(False)
+        current_ax.axvline(x=0, color='black', linestyle=':', linewidth=1)
+        current_ax.grid(False)
+        current_ax.tick_params(axis='both', which='both', length=0)
+        current_ax.spines['top'].set_visible(False)
+        current_ax.spines['right'].set_visible(False)
+
+    last_ax = ps_ax[-1] if len(ks) > 1 else ps_ax
+    last_ax.set_xlabel('Stable phase derivative', fontsize=12, labelpad=10)  # Changed label
+
+    ps_fig.text(0.01, 0.5, 'pdf', va='center', rotation='vertical')
+
+    plt.savefig('figs/analysis/filtered_stable_derivatives.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    df_data = []
+    for group_name in ks:
+        derivs = filtered_derivs_by_group.get(group_name, [])
+        for deriv_value in derivs:
+            df_data.append({'Group': group_name, 'Derivative': deriv_value})
+
+    df = pd.DataFrame(df_data)
+    y_min, y_max = -0.5, 0.5
+    fig, ax = plt.subplots(figsize=(10, 8))
+    palette = [colormap(i * 3) for i in range(len(ks))]
+    sns.violinplot(
+        x='Group',
+        y='Derivative',
+        data=df,
+        ax=ax,
+        inner='quartile',
+        palette=palette,
+        edgecolor='black',
+        linewidth=1
+    )
+    ax.axhline(y=0, color='black', linestyle=':', linewidth=1)
+    ax.set_ylim(y_min, y_max)
+    ax.set_ylabel('Stable Phase Derivative', fontsize=14)
+    ax.set_xlabel('Group', fontsize=14)
+    ax.set_title('Distribution of Stable Phase Derivatives by Group', fontsize=16)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.tight_layout()
+    plt.savefig('figs/analysis/stable_derivs_violin_plot_seaborn.png', dpi=300)
+    plt.close()
 
 
 def plot_aggregate_fitted_prc(allfits):
@@ -1318,7 +1422,7 @@ def plot_aggregate_fitted_prc(allfits):
     fit_x = np.linspace(0.0, 1.0, 200)
 
     for key in allfits.keys():
-        af = np.array(allfits[key])  # Shape: (num_keys, len(fit_x))
+        af = np.array(allfits[key])
 
         mean_fit = np.mean(af, axis=0)
         std_fit = np.std(af, axis=0)
@@ -1442,18 +1546,6 @@ def plot_statistics(rmses, ks, plot_params):
             ax[i].hist2d(all_phases_, all_freqs_,
                          bins=[np.arange(-0.5, 0.5, 0.1), np.arange(0.0, 1.1, 0.1)],
                          cmap=cmap)
-
-            # # Add contour lines
-            # xy = np.vstack([all_phases_, all_freqs_])
-            # z = gaussian_kde(xy)(xy)
-            #
-            # # Sort points by density for better contour visualization
-            # idx = z.argsort()
-            # x, y, z = np.array(all_phases_)[idx], np.array(all_freqs_)[idx], z[idx]
-
-            # Plot contours
-            # ax[i].tricontour(x, y, z, levels=5, colors='black', linewidths=0.5, alpha=0.5)
-
             ax[i].set_ylim(0.0, 1.0)
             ax[i].tick_params(axis='y', colors='white')
 
@@ -1463,8 +1555,6 @@ def plot_statistics(rmses, ks, plot_params):
 
         plt.savefig(plot_params.save_folder + '/response_period_vs_delay')
         plt.close(fig)
-
-        # delay and response time trajectories
         colormap = plt.cm.get_cmap('Spectral', len(ks)*3)
 
         # delay
@@ -1498,7 +1588,6 @@ def plot_statistics(rmses, ks, plot_params):
                 ax[kk].set_facecolor(np.array([22, 22, 22]) / 255)
                 ax[kk].tick_params(axis='y', colors='gray')
                 ax[kk].grid(False)
-                # ax[kk].set_ylim((-0.5 * (float(k)/1000)) - 0.02, ((float(k)/1000) * 0.5) + 0.02)
 
             ax[0].set_ylabel('Phase\nDiff [s]', color='gray')
             ax[-1].set_xlabel('Experiment time [s]', color='gray')
@@ -1523,12 +1612,11 @@ def plot_statistics(rmses, ks, plot_params):
                     times.append(time)
                     freqs.append(freq)
 
-                if len(freqs) > 2:  # Ensure we have enough data points
+                if len(freqs) > 2:
                     times = np.array(times)
                     freqs = np.array(freqs)
                     ref_freq = float(k) / 1000
 
-                    # Compute normalized differences
                     diffs = np.abs(freqs - ref_freq)
                     max_diff = np.max(diffs) if np.max(diffs) > 0 else 1
                     normalized_diffs = diffs / max_diff
@@ -1536,7 +1624,6 @@ def plot_statistics(rmses, ks, plot_params):
                     alphas = 1.0 - 0.5 * normalized_diffs
                     ax[kk].scatter(times, freqs, color=color, alpha=alphas, s=10)
                 ax[kk].axhline(float(k)/1000, color='white', linestyle='--', linewidth=1)
-                # Axis formatting
                 ax[kk].spines['top'].set_visible(False)
                 ax[kk].spines['right'].set_visible(False)
                 ax[kk].spines['bottom'].set_visible(True)
@@ -1546,7 +1633,6 @@ def plot_statistics(rmses, ks, plot_params):
                 ax[kk].set_facecolor(np.array([22, 22, 22]) / 255)
                 ax[kk].tick_params(axis='y', colors='gray')
                 ax[kk].grid(False)
-                # ax[kk].set_ylim(0.0, ((float(k)/1000) * 1.5) + 0.02)
             ax[0].set_ylabel('Response\nTime [s]', color='gray')
             ax[-1].set_xlabel('Experiment time [s]', color='gray')
             ax[-1].tick_params(axis='x', colors='gray')
@@ -1564,7 +1650,6 @@ def plot_statistics(rmses, ks, plot_params):
             xs = np.array([a[0] for a in all_delay_responses])
             ys = np.array([a[1] for a in all_delay_responses])
 
-            # Process the most common y-values for each x
             x_dict = {}
             for q, x in enumerate(xs):
                 rounded_x = round(x, 2)
@@ -1590,17 +1675,12 @@ def plot_statistics(rmses, ks, plot_params):
                 smooth_upper = np.interp(xx_, to_plot_xs, to_plot_ys + to_plot_stds)
                 smooth_lower = np.interp(xx_, to_plot_xs, to_plot_ys - to_plot_stds)
 
-            # Choose color
             color = 'yellow' if i == 4 else colormap.__call__(i * 3)
 
-            # Plot the smooth envelope
             axes[i].plot(xx_, smooth_ys, color=color, linewidth=2)
             axes[i].fill_between(xx_, smooth_lower, smooth_upper, color='gray', alpha=0.25)
-
-            # Hide x-axis except for the last subplot
             if i != len(ks) - 1:
                 axes[i].xaxis.set_visible(False)
-
             axes[i].set_xlim(-0.5, 0.5)
             axes[i].spines['top'].set_visible(False)
             axes[i].spines['right'].set_visible(False)
@@ -1618,11 +1698,8 @@ def plot_statistics(rmses, ks, plot_params):
             ys = np.array([a[1] for a in all_delay_responses])
             all_all_delay_responses.extend(all_delay_responses)
 
-            # Define bin edges
             bin_edges = np.arange(-0.5, 0.5 + bin_size, bin_size)
-            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # Midpoints of bins
-
-            # Compute mean and standard deviation in each bin
+            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
             binned_means = []
             binned_stds = []
             for j in range(len(bin_edges) - 1):
@@ -1631,29 +1708,24 @@ def plot_statistics(rmses, ks, plot_params):
                     binned_means.append(np.mean(ys[mask]))
                     binned_stds.append(np.std(ys[mask]))
                 else:
-                    binned_means.append(np.nan)  # Empty bins remain NaN
+                    binned_means.append(np.nan)
                     binned_stds.append(np.nan)
 
             binned_means = np.array(binned_means)
             binned_stds = np.array(binned_stds)
 
-            # Choose color
             color = 'yellow' if i == 4 else colormap.__call__(i * 3)
-
-            # Adjust bar properties based on sign of mean shift
             for j in range(len(bin_centers)):
-                if np.isnan(binned_means[j]):  # Skip empty bins
+                if np.isnan(binned_means[j]):
                     continue
 
                 alpha = 1.0 if binned_means[j] > 0 else 0.6
-                linewidth = 2.0 if binned_means[j] > 0 else 1.0  # Thicker outline for positive trend
+                linewidth = 2.0 if binned_means[j] > 0 else 1.0
 
                 axes[i].bar(
                     bin_centers[j], binned_means[j], width=bin_size * 0.9,
                     color=color, edgecolor='black', alpha=alpha, linewidth=linewidth
                 )
-
-            # Formatting
             if i != len(ks) - 1:
                 axes[i].xaxis.set_visible(False)
 
@@ -1662,19 +1734,18 @@ def plot_statistics(rmses, ks, plot_params):
             axes[i].spines['top'].set_visible(False)
             axes[i].spines['right'].set_visible(False)
 
-        # Labels
         axes[int(len(ks) - 1)].set_xlabel('Normalized Time Delay')
         axes[int(len(ks) / 2)].set_ylabel('Average Period Shift [s]')
-
-        # Save and close plot
         plt.savefig(plot_params.save_folder + '/binned_prc')
         plt.close(fig)
+
+        # aggregate PRC
         fig, axes = plt.subplots()
         xs = np.array([a[0] for a in all_all_delay_responses])
         ys = np.array([a[1] for a in all_all_delay_responses])
 
         bin_edges = np.arange(-0.5, 0.5 + bin_size, bin_size)
-        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2  # Midpoints of bins
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
         binned_means = []
         binned_stds = []
@@ -1684,28 +1755,24 @@ def plot_statistics(rmses, ks, plot_params):
                 binned_means.append(np.mean(ys[mask]))
                 binned_stds.append(np.std(ys[mask]))
             else:
-                binned_means.append(np.nan)  # Empty bins remain NaN
+                binned_means.append(np.nan)
                 binned_stds.append(np.nan)
 
         binned_means = np.array(binned_means)
         binned_stds = np.array(binned_stds)
 
         color = 'purple'
-
-        # Adjust bar properties based on sign of mean shift
         for j in range(len(bin_centers)):
-            if np.isnan(binned_means[j]):  # Skip empty bins
+            if np.isnan(binned_means[j]):
                 continue
 
             alpha = 1.0 if binned_means[j] > 0 else 0.6
-            linewidth = 2.0 if binned_means[j] > 0 else 1.0  # Thicker outline for positive trend
+            linewidth = 2.0 if binned_means[j] > 0 else 1.0
 
             axes.bar(
                 bin_centers[j], binned_means[j], width=bin_size * 0.9, color=color, edgecolor='black', alpha=alpha,
                 linewidth=linewidth
             )
-
-        # Formatting
 
         axes.set_xlim(-0.533, 0.533)
         axes.set_ylim(-0.2, 0.2)
@@ -1741,7 +1808,7 @@ def plot_statistics(rmses, ks, plot_params):
             axes[i].set_ylim(0.0, 6.0)
         axes[len(ks) - 1].set_xlabel('T[s]')
         axes[int(len(ks) / 2)].set_ylabel('pdf')
-        plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_2024_before_nolines')
+        plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_2025_before_nolines')
         plt.close(fig)
 
         fig, axes = plt.subplots(2, figsize=(8, 6))
@@ -1855,7 +1922,7 @@ def plot_statistics(rmses, ks, plot_params):
                 x_a = x_positions[(k, 'After')]
 
                 if var_before > var_after:
-                    print(i, k)
+                    print(individual_idx, k)
                 ax.plot([x_b, x_a], [var_before, var_after], color=color_map[i], alpha=0.6, linewidth=1)
                 ax.scatter([x_b, x_a], [var_before, var_after], color=color_map[i], s=30,
                            label=f'k={k}' if individual_idx == 0 else None)
@@ -1877,8 +1944,10 @@ def plot_statistics(rmses, ks, plot_params):
         plt.close()
 
     if plot_params.do_windowed_period_plot:
-        fig, axes = plt.subplots(len(ks))
+        fig, axes = plt.subplots(len(ks), figsize=(10, 8))
         for i, k in enumerate(ks):
+            axes[i].grid(False)
+            axes[i].tick_params(axis='both', which='both', length=0)
             all_befores[k] = []
             all_afters[k] = []
             for individual in rmses['windowed_period_after'][k]:
@@ -1909,29 +1978,29 @@ def plot_statistics(rmses, ks, plot_params):
                 axes[i].axvline(float(k) / 1000, color='black', label='LED period')
                 axes[i].axvline(0.5 * (float(k) / 1000), color='black', linestyle='--', label='0.5 * LED period')
                 axes[i].axvline(2.0 * (float(k) / 1000), color='black', linestyle=':', label='2.0 * LED period')
-                axes[i].legend()
             if i != len(ks) - 1:
                 axes[i].xaxis.set_visible(False)
             axes[i].set_xlim(0.0, 2.05)
             axes[i].set_ylim(0.0, 6.0)
 
         if plot_params.save_data:
-            with open(plot_params.save_folder+'/all_befores_from_experiments.pickle', 'wb') as handle:
+            with open(plot_params.save_folder + '/all_befores_from_experiments.pickle', 'wb') as handle:
                 pickle.dump(all_befores, handle, protocol=pickle.HIGHEST_PROTOCOL)
-            with open(plot_params.save_folder+'/all_afters_from_experiments.pickle', 'wb') as handle:
+            with open(plot_params.save_folder + '/all_afters_from_experiments.pickle', 'wb') as handle:
                 pickle.dump(all_afters, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         axes[len(ks) - 1].set_xlabel('T[s]')
-        axes[int(len(ks) / 2)].set_ylabel('pdf')
-        plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2024_windowed_beforeafter_w_lines')
+        fig.text(0.01, 0.5, 'pdf', va='center', rotation='vertical')
+        plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2025_windowed_beforeafter_w_lines')
         plt.close(fig)
 
         if plot_params.do_boxplots:
-            # Fig 5
             boxplots(all_befores, all_afters, plot_params)
 
-        fig, axes = plt.subplots(len(ks))
+        fig, axes = plt.subplots(len(ks), figsize=(10, 8))
         for i, k in enumerate(ks):
+            axes[i].grid(False)
+            axes[i].tick_params(axis='both', which='both', length=0)
             all_afters[k] = []
             for individual in rmses['windowed_period_after'][k]:
                 try:
@@ -1960,12 +2029,14 @@ def plot_statistics(rmses, ks, plot_params):
             axes[i].set_xlim(0.0, 2.05)
             axes[i].set_ylim(0.0, 6.0)
         axes[len(ks) - 1].set_xlabel('T[s]')
-        axes[int(len(ks) / 2)].set_ylabel('pdf')
-        plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2024_windowed_after_w_lines')
+        fig.text(0.01, 0.5, 'pdf', va='center', rotation='vertical')
+        plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2025_windowed_after_w_lines')
         plt.close(fig)
 
-        fig, axes = plt.subplots(len(ks))
+        fig, axes = plt.subplots(len(ks), figsize=(10, 8))
         for i, k in enumerate(ks):
+            axes[i].grid(False)
+            axes[i].tick_params(axis='both', which='both', length=0)
             all_afters[k] = []
             for individual in rmses['windowed_period_after'][k]:
                 try:
@@ -1985,12 +2056,11 @@ def plot_statistics(rmses, ks, plot_params):
             axes[i].set_xlim(0.0, 2.05)
             axes[i].set_ylim(0.0, 6.0)
         axes[len(ks) - 1].set_xlabel('T[s]')
-        axes[int(len(ks) / 2)].set_ylabel('pdf')
-        plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2024_windowed_after')
+        fig.text(0.01, 0.5, 'pdf', va='center', rotation='vertical')
+        plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2025_windowed_after')
         plt.close(fig)
 
-        fig, axes = plt.subplots(len(ks), figsize=(8, 6))
-
+        fig, axes = plt.subplots(len(ks), figsize=(10, 8))
         all_before = []
         all_afters = {}
         all_befores = {}
@@ -2037,57 +2107,8 @@ def plot_statistics(rmses, ks, plot_params):
             axes[i].set_ylim(0.0, 6.0)
         axes[len(ks) - 1].set_xlabel('T[s]')
         axes[int(len(ks) / 2)].set_ylabel('pdf')
-        plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_2024_w_aggregatebefore_after')
+        plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_2025_w_aggregatebefore_after')
         plt.close(fig)
-
-    ## Extraneous
-    if plot_params.do_recurrence_diagrams:
-        for i, k in enumerate(ks):
-            fig, ax = plt.subplots()
-            all_recurrences_first = []
-            all_recurrences_second = []
-            all_recurrences_third = []
-            for individual in rmses['windowed_period_after'][k]:
-                try:
-                    for j in range(len(individual) - 2):
-                        all_recurrences_first.append(individual[j])
-                        all_recurrences_second.append(individual[j + 1])
-                        all_recurrences_third.append(individual[j + 2])
-                except TypeError:
-                    continue
-
-            h = ax.hist2d(np.array(all_recurrences_first, dtype=np.float64),
-                          np.array(all_recurrences_second, dtype=np.float64), norm=matplotlib.colors.LogNorm(),
-                          bins=(np.arange(0.0, 2.0, (1 / 30)), np.arange(0.0, 2.0, (1 / 30))), density=True)
-
-            ax.set_xlabel('Period time t')
-            ax.set_ylabel('Period time t+1')
-            ax.set_title(k)
-            ax.set_facecolor(cm.get_cmap('viridis', 100).__call__(0))
-            plt.colorbar(h[3])
-            plt.savefig(plot_params.save_folder + '/recurrences2d_{}_2024'.format(k))
-            plt.close(fig)
-
-    if plot_params.do_period_over_time:
-        for i, k in enumerate(ks):
-            fig, axes = plt.subplots()
-            axes.spines['top'].set_visible(False)
-            axes.spines['right'].set_visible(False)
-
-            colormap_1 = cm.get_cmap('winter', len(rmses['windowed_period_after'][k]) * 2)
-            for q, j in enumerate(range(len(rmses['windowed_period_after'][k]))):
-                try:
-                    axes.plot([q + x for x in rmses['windowed_period_after'][k][j] if x > 0.2][::2], lw=1,
-                              color=colormap_1.__call__(j + j))
-                except ValueError:
-                    continue
-                except TypeError:
-                    axes.plot(q + np.array(rmses['windowed_period_after'][k][j]), lw=1, color=colormap_1.__call__(j))
-            axes.set_xlabel('Flash instance')
-            axes.set_ylabel('Period + firefly instance')
-            plt.title('LED freq ' + k + 'ms')
-            plt.savefig(plot_params.save_folder + '/period_lines_over_time_{}'.format(k))
-            plt.close(fig)
 
     if plot_params.do_scatter_overall_stats:
         fig,ax = plt.subplots()

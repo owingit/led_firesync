@@ -552,10 +552,6 @@ if __name__ == '__main__':
     parser.add_argument('--save_data', action='store_true', help='Whether to save aggregate data for faster loading')
     parser.add_argument('--load_data_from_dists', action='store_true',
                         help='Whether to load data from processed distributions for speed')
-
-    parser.add_argument('--do_recurrence_diagrams', action='store_true', help='Whether to plot recurrence diagrams')
-    parser.add_argument('--do_period_over_time', action='store_true',
-                        help='Whether to plot period over time values per trial')
     parser.add_argument('--do_initial_distribution', action='store_true',
                         help='Whether to plot initial distribution of periods for all sampled fireflies')
     parser.add_argument('--do_scatter_overall_stats', action='store_true', help='Whether to scatter @ aggregate-level')

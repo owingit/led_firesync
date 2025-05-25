@@ -562,6 +562,8 @@ def bout_analysis(pargs):
         '20220524_500_83': [308, 322],
     }
     for fp in fpaths:
+        if fp == '.DS_Store':
+            continue
         path, framerate = check_frame_rate(pargs.data_path + '/' + fp)
         if path is None:
             continue
@@ -708,6 +710,41 @@ def compute_det_and_lam_and_rr(R, l_min=2, v_min=2):
 
 
 def windowed_rqa(recurrence_matrix, flash_times, led_start_time, name, times, phases, shifts, responses, max_gap=2.0):
+    """
+    Perform windowed Recurrence Quantification Analysis (RQA) on a sequence of flash times and associated recurrence matrix.
+
+    This function identifies temporal bouts of flashing activity following a specified LED stimulus start time,
+    computes RQA metrics (determinism, laminarity, recurrence rate) for each bout using the recurrence matrix,
+    and attaches phase response curve (PRC)-related values (phases, shifts, responses) that occur during each bout.
+    It also computes summary statistics about the flashing period before the stimulus.
+
+    Parameters:
+        recurrence_matrix (np.ndarray): Binary square matrix indicating recurrences between flash times.
+        flash_times (list of float): Timestamps of detected flashes (in seconds).
+        led_start_time (float): Time (in seconds) when the LED stimulus began.
+        name (str): Identifier for the dataset or subject.
+        times (list of float): Timestamps corresponding to PRC values.
+        phases (list of float): Phase values associated with the PRC.
+        shifts (list of float): Phase shifts from the PRC analysis.
+        responses (list): Corresponding response values (e.g., binary spike or flash responses).
+        max_gap (float, optional): max time gap (in seconds) b/w flashes to consider them same bout (default 2.0)
+
+    Returns:
+        list of dict: A list of dictionaries, one per bout, each containing:
+            - "start_idx": Start time of the bout.
+            - "end_idx": End time of the bout.
+            - "duration": Duration of the bout (seconds).
+            - "num_flashes": Number of flashes in the bout.
+            - "det": Determinism metric of the recurrence matrix.
+            - "lam": Laminarity metric of the recurrence matrix.
+            - "rr": Recurrence rate of the recurrence matrix.
+            - "name": Identifier for the dataset or subject.
+            - "phases": PRC phase values during the bout.
+            - "shifts": PRC shift values during the bout.
+            - "responses": PRC response values during the bout.
+            - "prior_period": Median inter-flash interval before the stimulus.
+            - "prior_period_var": Variance of inter-flash intervals before the stimulus.
+    """
     ft = [x for x in flash_times if x >= led_start_time]
     prior_flashes = [x for x in flash_times if x < led_start_time]
 
@@ -778,7 +815,6 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
                 score = bout['det'] + bout['lam']
                 bouts.append((key, bout, score, bout['num_flashes']))
 
-    # Sort by score and only select top if they have enough flashes
     sorted_bouts = sorted(bouts, key=lambda x: x[2], reverse=True)
     top_bouts = [b for b in sorted_bouts if b[3] > num_flashes][:top_n]
     bottom_bouts = sorted_bouts[-top_n:]
@@ -787,7 +823,6 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
     for i, (key, bout, score, nf) in enumerate(selected_bouts):
         date, led_freq, index = key.split('_')
 
-        # Construct file path
         fname = f"{date}_{led_freq}_{index}.csv"
         fpath = os.path.join(pargs.data_path, fname)
 
@@ -798,7 +833,6 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
             if not os.path.exists(fpath):
                 continue
 
-        # Load data
         with open(fpath, 'r') as data_file:
             ts = {'ff': [], 'led': []}
             data = list(csv.reader(data_file))
@@ -809,7 +843,6 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
                 except IndexError:
                     print(f'Error loading data with {fpath}')
 
-            # Prepare time series data
             if date[0] == '0':
                 date = date[-4:] + date[:-4]
             expname = '{}_{}_{}'.format(date, key, index)
@@ -836,7 +869,6 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
             led_xs_flashes = dedupe(led_xs_flashes, 0.08)
             ff_xs_flashes = [x for x, y in zip(ff_xs, ff_ys) if y == 0.5]
             ff_xs_flashes = dedupe(ff_xs_flashes, 0.08)
-            # Save to CSV
             outname = f'bout_{i:02d}_score_{score:.2f}_{key}_[{min_x}-{max_x}].csv'
             outpath = os.path.join(f'bouts_{bout_gap_length}', outname)
             os.makedirs(f'bouts_{bout_gap_length}', exist_ok=True)
@@ -848,7 +880,6 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
             print(f"Saved {outpath}")
             plt.figure(figsize=(6, 2))
 
-            # Highlight flash points
             plt.scatter(ff_xs_flashes, [0.5] * len(ff_xs_flashes), color='green', s=10, marker='o', label='FF flashes')
             plt.scatter(led_xs_flashes, [0.51] * len(led_xs_flashes), color='purple', s=10, marker='x',
                         label='LED flashes')
@@ -860,7 +891,6 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
             plt.legend(loc='upper right', fontsize='x-small', frameon=False)
             plt.tight_layout()
 
-            # Save plot
             plotname = f'bout_{i:02d}_score_{score:.2f}_{key}[{min_x}-{max_x}].png'
             plotpath = os.path.join(f'bouts_{bout_gap_length}', plotname)
             plt.savefig(plotpath, dpi=150)
@@ -879,7 +909,6 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
                 from collections import defaultdict
                 shift_sums = defaultdict(lambda: [0, 0])  # [sum of shifts, count]
 
-                # Aggregate shifts per phase
                 for p, s in zip(phases, shifts):
                     p = round(p, 6)
                     if MIN_CUTOFF_PERIOD <= s <= MAX_CUTOFF_PERIOD:
@@ -934,6 +963,8 @@ def do_nonlinear_analysis(pargs):
 
     do_bouts = True
     for fp in fpaths:
+        if fp == '.DS_Store':
+            continue
         path, framerate = check_frame_rate(pargs.data_path + '/' + fp)
         if path is None:
             continue
@@ -967,7 +998,7 @@ def do_nonlinear_analysis(pargs):
             ### NLAnalysis
             _, _, pairs, period = compute_phase_response_curve(time_series_led=led_xs_flashes,
                                                                time_series_ff=ff_xs_flashes,
-                                                               epsilon=0.08,  # one frame
+                                                               epsilon=1 / framerate, # 0.08
                                                                m=float(key) / 1000,
                                                                do_responses_relative_to_ff=pargs.do_ffrt,
                                                                only_lookback=pargs.re_norm)
@@ -976,7 +1007,6 @@ def do_nonlinear_analysis(pargs):
             figtitle = 'figs/analysis/DFA_Analysis_and_Cross-Correlation_of_phases_{}_{}_{}.png'.format(date, key, index)
 
             if pargs.re_norm:
-                # phases = renorm_phases(phases)
                 figtitle = 'figs/analysis/DFA_Analysis_and_Cross-Correlation_of_phases_0-1_{}_{}_{}.png'.format(date,
                                                                                                                 key,
                                                                                                                 index)
