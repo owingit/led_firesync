@@ -4,6 +4,42 @@ from scipy import stats
 
 
 def calculate_statistics(d, key, instance, pargs):
+    """
+    Calculate a wide range of flash timing statistics for a single trial instance under a specific stimulus frequency
+
+    Processes pairs of firefly flash data and LED timing data to compute:
+    - Inter-flash periods before and after LED introduction
+    - Windowed and rolling average flash statistics
+    - Synchrony with LED flashes
+    - Phase response curve information
+    - Connected component analysis for assessing bout structure
+    - Root mean squared error (RMSE) and variability of flash timing
+    - Differences in timing between firefly flashes and LED flashes
+    and more
+
+    Parameters:
+    -----------
+    d: data dictionary containing LED and firefly flash timing information.
+       Should have structure like
+            d[freq_key][instance]['led'] and d[freq_key][instance]['ff']
+    key: frequency string indicating the LED interflash interval in milliseconds (e.g., '300', '600').
+    instance: instance identifier for a particular recording or observation.
+    pargs: program args
+
+    Returns:
+    --------
+    dict
+        Dictionary of statistical results including:
+            - Flash period statistics (mean, variance, median, RMSE)
+            - Flash timing distributions before/after LED onset
+            - Rolling window flash analysis
+            - Phase response metrics
+            - Flash-LED synchronization measures
+            - Connected component statistics (optional)
+            - Error metrics relative to stimulus frequency
+            - Flash density and recurrence characteristics
+        and more
+    """
     for arg_name, arg_value in vars(pargs).items():
         if arg_name not in ['save_folder', 'p', 'investigate', 'window_size_seconds', 'data_path', 'save_data']:
             if arg_value:  # Check if the argument is True
@@ -281,13 +317,28 @@ def calculate_statistics(d, key, instance, pargs):
 
 
 def sliding_window_stats(d, pargs):
-    #
-    # Setup return dict for statistical tests and populate by running the tests defined in helpers.py
-    # Average and all inter-flash for any and all days:
-    # Average and all time delays for any and all days:
-    # Recurrence of period over the course of an experiment
-    # First flash synchrony, mode periods, sum of differences w/ LED, etc.
-    #
+    """
+    This function loops over the input data and computes:
+    - Aggregated inter-flash periods across windows
+    - Time delays between firefly and LED flashes
+    - Flash synchrony events and their timing
+    - Statistical summaries such as median, mode, and RMSE over time
+    - Recurrence and stability of flash patterns across time
+    - Phase-based differences when LED is active
+
+    This serves as a higher-level aggregation and summarization tool which calls --calculate_statistics--
+    on different conditions
+
+    Parameters:
+    -----------
+    d: dataset containing all LED and firefly flash instances.
+    pargs: program args
+
+    Returns:
+    --------
+    dict
+        Aggregated statistics and temporal patterns from all data instances.
+    """
     ks = ['300', '400', '500', '600', '700', '770', '850', '1000']
     rmses = {'rmse': dict.fromkeys(ks, None),
              'rmse_after': dict.fromkeys(ks, None),

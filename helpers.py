@@ -124,6 +124,18 @@ def find_time_delays(time_series_led, time_series_ff, window_length):
 
 
 def check_frame_rate(input_csv):
+    """
+    Ensures the frame rates of both sides of the data are consistent
+
+    Params:
+    - input_csv: data file
+
+    Returns:
+    - data file and the frame rate
+
+    Side effects:
+    - assertion failure if mismatch detected
+    """
     df = pd.read_csv(input_csv)
     df['LED times'] = df['LED times'].apply(eval)
     df['FF times'] = df['FF times'].apply(eval)
@@ -384,10 +396,24 @@ def estimate_embedding_params(x, max_tau=10):
 
 
 def sinusoid(x, A, B, C, D):
+    """Basic sinusoidal generating function"""
     return A * np.sin(B * x + C) + D
 
 
 def recurrence_period_density_entropy(R, normalize=True):
+    """
+    Compute the entropy of recurrence period densities from a recurrence matrix by
+    a) estimating how recurrence periods are distributed by looking above main diagonal
+    b) computing Shannon entropy to quantify the complexity or unpredictability of recurrence intervals
+
+    Params:
+    - R: Square binary recurrence matrix (shape: [n, n]).
+    - normalize: Whether to normalize the entropy to the range [0, 1]
+      by dividing by the log of the number of distinct recurrence periods. Defaults to True.
+
+    Returns:
+    - float: Shannon entropy of the recurrence period density. Returns 0.0 if no recurrences are found.
+    """
     n = R.shape[0]
     period_counts = {}
 
@@ -415,6 +441,17 @@ def recurrence_period_density_entropy(R, normalize=True):
 
 
 def circular_autocorrelation(phases, max_lag=None):
+    """
+    Computes the circular autocorrelation of a sequence of phase value by treating input phases as angles
+    on the unit circle
+
+    Parameters:
+    - phases: Sequence of phase values (in radians).
+    - max_lag: Maximum lag (in samples) to compute autocorrelation for. Defaults to len(phases) - 1.
+
+    Returns:
+    - np.ndarray: Array of autocorrelation magnitudes at each lag from 1 to max_lag.
+    """
     phases = np.array(phases)
     n = len(phases)
     if max_lag is None:
