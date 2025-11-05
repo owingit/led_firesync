@@ -40,8 +40,11 @@ def calculate_statistics(d, key, instance, pargs):
             - Flash density and recurrence characteristics
         and more
     """
+    k1 = (key == '300')
+    if k1:
+        print('Starting analysis of temporal statistics')
     for arg_name, arg_value in vars(pargs).items():
-        if arg_name not in ['save_folder', 'p', 'investigate', 'window_size_seconds', 'data_path', 'save_data']:
+        if arg_name in ['do_delay_plot', 'do_windowed_period_plot', 'do_boxplots', 'do_initial_distribution', 'do_prc']:
             if arg_value:  # Check if the argument is True
                 print('Calculating statistics for {} instance {} of freq {}'.format(arg_name, instance, key))
     # flash timing limits
@@ -50,8 +53,6 @@ def calculate_statistics(d, key, instance, pargs):
 
     # window size (events)
     min_flashes_in_window = 3
-    k1 = (key == '300')
-    k2 = (key == '600')
 
     # LED information
     led_interflash = (float(key) / 1000)
@@ -67,7 +68,7 @@ def calculate_statistics(d, key, instance, pargs):
 
     # Combined information
     flash_times_to_include = helpers.get_starts_of_flashes(ff_xs, ff_ys)
-    trial_params = helpers.get_offset(pargs.p)
+    trial_params = helpers.get_trial_params(pargs.p)
     flashes_before = [x for x in flash_times_to_include if x < led_introduced]
     flashes_after = [x for x in flash_times_to_include if x >= led_introduced]
     _all_periods_before = np.diff(flashes_before)
@@ -85,7 +86,7 @@ def calculate_statistics(d, key, instance, pargs):
 
     # Accumulate the windowed periods and calculate rolling averages
     rolling_flash_avg_flash_times = helpers.get_rolling_window_flash_times(flash_times_to_include,
-                                                                           args.window_size_seconds)
+                                                                           pargs.window_size_seconds)
     rolling_flash_avg_flash_times_before = [f for f in rolling_flash_avg_flash_times if f[-1] < led_introduced]
     rolling_flash_avg_flash_times_after = [f for f in rolling_flash_avg_flash_times if f[-1] >= led_introduced]
     rolling_flash_periods_before = [y for x in rolling_flash_avg_flash_times_before if len(x) >= min_flashes_in_window

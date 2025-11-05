@@ -15,7 +15,7 @@ MIN_CUTOFF_PERIOD = 0.25
 MAX_CUTOFF_PERIOD = 2.5
 
 
-def get_bout_cout_variance(f):
+def get_bout_count_variance(f):
     """
     Get the count and variance of a bout (consecutive flashes w/o a dropout stoppage)
 
@@ -63,6 +63,7 @@ def improved_circular_normalize(delays, led_period):
     Returns:
     -normalized delays: normalized delays in the range [-0.5, 0.5]
     """
+    delays = np.asarray(delays)
     # Normalize using the known LED period
     normalized_delays = (delays % led_period) / led_period
 
@@ -440,6 +441,32 @@ def recurrence_period_density_entropy(R, normalize=True):
     return entropy
 
 
+def circular_variance(phases, cycle_length):
+    """
+    Compute circular variance of phases defined on [0, cycle_length].
+
+    Parameters:
+    - phases: array-like, phase values in [0, cycle_length]
+    - cycle_length: float, the full cycle length (e.g., 1.0 or the LED period)
+
+    Returns:
+    - float: circular variance in [0, 1]
+    """
+    phases = np.asarray(phases) % cycle_length
+    n = len(phases)
+    if n < 2:
+        return 0.0
+
+    diffs = np.abs(phases[:, None] - phases[None, :])
+    circular_diffs = np.minimum(diffs, cycle_length - diffs)
+
+    # Normalize differences to [0, 0.5]
+    norm_diffs = circular_diffs / (cycle_length / 2.0)  # now in [0, 1]
+    var = np.mean(norm_diffs ** 2)
+
+    return var
+
+
 def circular_autocorrelation(phases, max_lag=None):
     """
     Computes the circular autocorrelation of a sequence of phase value by treating input phases as angles
@@ -578,7 +605,12 @@ def recurrence_metrics(recurrence_matrix):
     return rr, det, lam, rpde
 
 
-def recurrence(ps, method='median', do_stats=False):
+def circular_distance_matrix(phases, cycle_length):
+    diff_matrix = phases[:, np.newaxis] - phases[np.newaxis, :]
+    return np.abs((diff_matrix + cycle_length / 2) % cycle_length - cycle_length / 2)
+
+
+def recurrence(ps, cycle_length, method='median', do_stats=False):
     """
     Calculate recurrence plot on list of phases
 
@@ -591,7 +623,8 @@ def recurrence(ps, method='median', do_stats=False):
       and statistics about the matrix or None if unspecified
     """
     phases = np.array(ps)
-    distances = np.abs(phases[:, np.newaxis] - phases[np.newaxis, :])
+    # distances = np.abs(phases[:, np.newaxis] - phases[np.newaxis, :])
+    distances = circular_distance_matrix(phases, float(cycle_length)/1000)
 
     tau = None
     embed_dim = None
@@ -783,7 +816,17 @@ def compute_det_and_lam_and_rr(R, l_min=2, v_min=2):
     return det, lam, rr
 
 
-def windowed_rqa(recurrence_matrix, flash_times, led_start_time, name, times, phases, shifts, responses, max_gap=2.0):
+def compute_phase_shift(t, prior_period, reference_time):
+    """
+    Compute phase shift as the deviation from expected phase
+    given a reference time and prior period.
+    """
+    expected_phase = ((t - reference_time) % prior_period) / prior_period  # normalized [0,1)
+    return expected_phase  # or subtract from actual phase if needed
+
+
+def windowed_rqa(recurrence_matrix, flash_times, led_flash_times, led_start_time, name, times, phases, responses,
+                 max_gap=2.0):
     """
     Perform windowed Recurrence Quantification Analysis (RQA) on a sequence of flash times and associated recurrence matrix.
 
@@ -795,11 +838,11 @@ def windowed_rqa(recurrence_matrix, flash_times, led_start_time, name, times, ph
     Parameters:
         recurrence_matrix (np.ndarray): Binary square matrix indicating recurrences between flash times.
         flash_times (list of float): Timestamps of detected flashes (in seconds).
+        led_flash_times (list of float): Timestamps of detected flashes by LED (in seconds).
         led_start_time (float): Time (in seconds) when the LED stimulus began.
         name (str): Identifier for the dataset or subject.
         times (list of float): Timestamps corresponding to PRC values.
         phases (list of float): Phase values associated with the PRC.
-        shifts (list of float): Phase shifts from the PRC analysis.
         responses (list): Corresponding response values (e.g., binary spike or flash responses).
         max_gap (float, optional): max time gap (in seconds) b/w flashes to consider them same bout (default 2.0)
 
@@ -841,20 +884,39 @@ def windowed_rqa(recurrence_matrix, flash_times, led_start_time, name, times, ph
         bout_start_time = flash_times[start]
         bout_end_time = flash_times[end]
 
-        # Subset the PRC-related values
+        # Get all flashes within bout
+        bout_ts = []
         bout_phases = []
-        bout_shifts = []
         bout_responses = []
-        for t, p, s, r in zip(times, phases, shifts, responses):
+
+        for t, p, r in zip(times, phases, responses):
             if bout_start_time <= t <= bout_end_time:
+                bout_ts.append(t)
                 bout_phases.append(p)
-                bout_shifts.append(s)
                 bout_responses.append(r)
+
+        bout_shifts = []
+        p_prev = prior_period
+
+        for i in range(len(bout_ts)):
+            if i == 0:
+                shift = None  # or 0, or np.nan
+            else:
+                T_current = bout_ts[i] - bout_ts[i - 1]
+                shift = (T_current - p_prev) / p_prev
+                p_prev = T_current  # Update for next step
+
+            if shift is None:
+                bout_shifts.append(np.nan)
+            else:
+                bout_shifts.append(1.0 + shift)
 
         results.append({
             "start_idx": bout_start_time,
             "end_idx": bout_end_time,
             "duration": bout_end_time - bout_start_time,
+            "full_timeseries": {"led": led_flash_times,
+                                "firefly": flash_times},
             "num_flashes": end - start,
             "det": det,
             "lam": lam,
@@ -893,7 +955,36 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
     top_bouts = [b for b in sorted_bouts if b[3] > num_flashes][:top_n]
     bottom_bouts = sorted_bouts[-top_n:]
     selected_bouts = top_bouts + bottom_bouts
+    bottom_derivs = []
+    for t in bottom_bouts:
+        phases = t[1]['phases']
+        phase_derivs = circular_diff(phases, float(t[0])/1000)
+        bottom_derivs.extend(phase_derivs)
+    top_derivs = []
+    for t in top_bouts:
+        phases = t[1]['phases']
+        phase_derivs = circular_diff(phases, float(t[0])/1000)
+        top_derivs.extend(phase_derivs)
+    fig, ax = plt.subplots(figsize=(10,6))
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
+    ax.hist(bottom_derivs, density=True, bins=np.arange(-1.0, 1.0, 0.13), color='gray', alpha=0.8,
+            label='Phase derivatives from drifting bouts')
+    ax.hist(top_derivs, density=True, bins=np.arange(-1.0, 1.0, 0.13), color='green', alpha=0.8,
+            label='Phase derivatives from stable bouts')
+    ax.set_xlabel(r'$\frac{d\phi}{dt}$ (s$^{-1}$)', fontsize=12)
+    ax.set_ylabel('pdf')
+    plt.legend()
+    plt.savefig('figs/best_worst_bout_phase_derivatives_{}.png'.format(bout_gap_length))
+    plt.close()
+    print('Top and bottom bouts used for phase derivatives: ')
+    print('Top: ')
+    for b in top_bouts:
+        print(b[0])
+    print('Bottom: ')
+    for b in bottom_bouts:
+        print(b[0])
     for i, (key, bout, score, nf) in enumerate(selected_bouts):
         date, led_freq, index = key.split('_')
 
@@ -943,14 +1034,27 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
             led_xs_flashes = dedupe(led_xs_flashes, 0.08)
             ff_xs_flashes = [x for x, y in zip(ff_xs, ff_ys) if y == 0.5]
             ff_xs_flashes = dedupe(ff_xs_flashes, 0.08)
-            outname = f'bout_{i:02d}_score_{score:.2f}_{key}_[{min_x}-{max_x}].csv'
-            outpath = os.path.join(f'bouts_{bout_gap_length}', outname)
-            os.makedirs(f'bouts_{bout_gap_length}', exist_ok=True)
 
+            # Merge and sort unique timestamps
+            # All timestamps within bout from either signal (ff or led)
+            all_ts = sorted(set(ff_xs + led_xs))
+            filtered_ts = [t for t in all_ts if min_x <= t <= max_x]
+
+            # Create rows for each timestamp
+            rows = []
+            for t in filtered_ts:
+                ff_state = int(any(abs(t - f) < 1e-6 for f in ff_xs_flashes))
+                led_state = int(any(abs(t - l) < 1e-6 for l in led_xs_flashes))
+                rows.append([ff_state, led_state, round(t, 6)])
+            outname = f'bout_{i:02d}_score_{score:.2f}_{key}_[{min_x}-{max_x}].csv'
+            outdir = f'bouts_{bout_gap_length}'
+            outpath = os.path.join(outdir, outname)
+            os.makedirs(outdir, exist_ok=True)
             with open(outpath, 'w', newline='') as outcsv:
                 writer = csv.writer(outcsv)
-                writer.writerow(['FF', 'LED'])
-                writer.writerows(zip(ff_xs_flashes, led_xs_flashes))
+                writer.writerow(['FF', 'LED', 'timestamp'])
+                writer.writerows(rows)
+
             print(f"Saved {outpath}")
             plt.figure(figsize=(6, 2))
 
@@ -1032,8 +1136,8 @@ def do_nonlinear_analysis(pargs):
     - pargs: command line arguments with some flags and such
     """
     fpaths = os.listdir(pargs.data_path)
-    metrics_dict = {bl: {} for bl in [2.0, 3.0, 4.0, 5.0]}
-    phases_dict = {bl: {} for bl in [2.0, 3.0, 4.0, 5.0]}
+    metrics_dict = {bl: {} for bl in [2.0, 3.0, 4.0]}
+    phases_dict = {bl: {} for bl in [2.0, 3.0, 4.0]}
 
     do_bouts = True
     for fp in fpaths:
@@ -1072,7 +1176,7 @@ def do_nonlinear_analysis(pargs):
             ### NLAnalysis
             _, _, pairs, period = compute_phase_response_curve(time_series_led=led_xs_flashes,
                                                                time_series_ff=ff_xs_flashes,
-                                                               epsilon=1 / framerate, # 0.08
+                                                               epsilon=0.08,
                                                                m=float(key) / 1000,
                                                                do_responses_relative_to_ff=pargs.do_ffrt,
                                                                only_lookback=pargs.re_norm)
@@ -1124,11 +1228,10 @@ def do_nonlinear_analysis(pargs):
             plt.close(fig)
 
             for data_type in ['real']:
-                for bout_gap_length in [2.0, 3.0, 4.0, 5.0]:
+                for bout_gap_length in [2.0, 3.0, 4.0]:
                     if data_type == 'real':
                         for method in ['percentage']:
-                        #for method in ['median', 'percentage', 'point_density', 'embedding']:
-                            r_currences, t, e, metrics = recurrence(phases, method, do_stats=True)
+                            r_currences, t, e, metrics = recurrence(phases, key, method, do_stats=True)
                             if not do_bouts:
                                 if method == 'percentage':
                                     metrics_dict[bout_gap_length]['{}_{}_{}'.format(date, key, index)] = metrics
@@ -1136,13 +1239,13 @@ def do_nonlinear_analysis(pargs):
                             else:
                                 if method == 'percentage':
                                     led_start_time = led_xs_flashes[0]
-                                    metrics = windowed_rqa(r_currences, ff_xs_flashes, led_start_time,
+                                    metrics = windowed_rqa(r_currences, ff_xs_flashes, led_xs_flashes, led_start_time,
                                                            '{}_{}_{}'.format(date, key, index),
-                                                           times, phases, shifts, responses, max_gap=bout_gap_length)
+                                                           times, phases, responses, max_gap=bout_gap_length)
                                     metrics_dict[bout_gap_length]['{}_{}_{}'.format(date, key, index)] = metrics
                                     phases_dict[bout_gap_length]['{}_{}_{}'.format(date, key, index)] = phases
 
-                                    r_currences, t, e, metrics = recurrence(phases, method, do_stats=True)
+                                    r_currences, t, e, metrics = recurrence(phases, key, method, do_stats=True)
 
                             fig, ax = plt.subplots()
                             plotting_helpers.plot_recurrence(r_currences, ax, method, t, e, metrics)
@@ -1157,12 +1260,13 @@ def do_nonlinear_analysis(pargs):
                             plt.savefig(figtitle)
                             plt.close(fig)
 
-    for bout_gap_length in [2.0, 3.0, 4.0, 5.0]:
+    for bout_gap_length in [2.0, 3.0, 4.0]:
         plotting_helpers.plot_recurrence_bouts(metrics_dict[bout_gap_length], bout_gap_length)
         plotting_helpers.plot_prc_by_key(metrics_dict[bout_gap_length], bout_gap_length)
         extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs,
                                  top_n=10, num_flashes=10, plot_prc=True)
-    print('here')
+        plotting_helpers.top_bottom_aggregate_statistics(metrics_dict, bout_gap_length, top_n=10,
+                                                         num_flashes=5)
 
 
 def dfa(time_series, scale_range=None, polynomial_order=2):
@@ -1304,7 +1408,7 @@ def whittle_mle(time_series):
     return H, ci
 
 
-def sliding_time_window_derivative(times, phases, window_seconds=3.0):
+def sliding_time_window_derivative(times, phases, cycle_length, window_seconds=3.0):
     """
     Compute phase derivative using a sliding time window approach.
 
@@ -1325,10 +1429,14 @@ def sliding_time_window_derivative(times, phases, window_seconds=3.0):
         end_idx = next((j for j in range(i, len(times)) if times[j] - times[i] > half_window),
                        len(times) - 1)
 
-        dt = times[end_idx] - times[start_idx]  # Total time difference in window
-        dphi = phases[end_idx] - phases[start_idx]  # Phase difference in window
+        dt = times[end_idx] - times[start_idx]  # Duration of the window
+        dphi = ((phases[end_idx] - phases[
+            start_idx] + cycle_length / 2) % cycle_length) - cycle_length / 2  # Wrapped difference
 
-        derivatives[i] = dphi / dt if dt != 0 else 0  # Avoid division by zero
+        if dt != 0:
+            derivatives[i] = dphi / dt
+        else:
+            derivatives[i] = 0
 
     return derivatives
 
@@ -1358,6 +1466,30 @@ def dedupe(flash_list, eps):
         if current_flash_group:
             deduped_flash_list.append(current_flash_group[0])
     return deduped_flash_list
+
+
+def circular_diff(phases, cycle_length):
+    phases = np.asarray(phases)
+    diffs = np.diff(phases)
+    diffs = (diffs + cycle_length/2) % cycle_length - cycle_length/2
+    return diffs
+
+
+def circular_diff_normalized(phases, dt=1.0):
+    """
+    Compute circular derivative of normalized phases (range [0,1)).
+
+    Parameters:
+    - phases: 1D array-like of normalized phase values
+    - dt: time between samples (default 1)
+
+    Returns:
+    - circular derivative array, length len(phases) - 1
+    """
+    phases = np.asarray(phases)
+    diff = np.diff(phases)
+    wrapped_diff = (diff + 0.5) % 1.0 - 0.5
+    return wrapped_diff / dt
 
 
 def compute_phase_response_curve(time_series_led, time_series_ff, epsilon=0.08, m=0.0,
@@ -1422,13 +1554,10 @@ def compute_phase_response_curve(time_series_led, time_series_ff, epsilon=0.08, 
                     closest_led_time = previous_led_time
             phase = firefly_time - closest_led_time
             phases.append(phase)
-
             response_time = firefly_time - previous_firefly_time
             response_times.append(response_time)
-
             phase_shift = response_time / previous_response_time
             phase_shifts.append(phase_shift)
-            previous_response_time = response_time
             if only_lookback:
                 if 0.0 <= phase <= m:
                     phase_time_diff_pairs.append((phase, response_time, phase_shift, firefly_time))
@@ -1463,7 +1592,6 @@ def compute_phase_response_curve(time_series_led, time_series_ff, epsilon=0.08, 
 
                 phase_shift = response_time / previous_response_time
                 phase_shifts.append(phase_shift)
-                previous_response_time = response_time
 
                 if only_lookback:
                     if 0.0 <= phase <= m:
@@ -1618,15 +1746,15 @@ def tighten(k):
     return k
 
 
-def get_offset(p):
+def get_trial_params(p):
     """
-     Get experimental offset, where necessary
+     Get experimental trial parameters, where necessary
 
      Parameters:
      - p: experimental index
 
      Returns:
-     Necessary offset subtraction based on experimental index
+     Correction for pth trial by audio correlation
      """
     return (0.56 if p else 0), (0.79 if p else 0), (0.08 if p else 0)
 

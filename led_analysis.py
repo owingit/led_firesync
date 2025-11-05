@@ -1,8 +1,10 @@
 import argparse
 import csv
+import numpy as np
 import os
 
 import helpers
+import prc_simulator
 import plotting_helpers
 import exp_stat_agg_helpers
 
@@ -69,6 +71,8 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--investigate', action='store_true', help='Whether to analyse timeseries')
     parser.add_argument('-a', '--do_nla', action='store_true', help='Whether to analyse with DFA')
     parser.add_argument('-w', '--write_timeseries', action='store_true', help='Whether to plot interactive timeseries')
+    parser.add_argument('-s', '--simulate', action='store_true', help='Whether to simulate IF based on PRC')
+
     parser.add_argument('--with_stats', action='store_true',
                         help='Whether to write the phase and response time alongside the timeseries')
     parser.add_argument('--do_ffrt', action='store_true')
@@ -88,16 +92,60 @@ if __name__ == '__main__':
     parser.add_argument('--window_size_seconds', type=int, default=5, help='Window size, in seconds, for ts analysis')
     parser.add_argument('--re_norm', action='store_true', help='Whether to convert from -0.5 - 0.5 to 0.0 - 1.0')
     parser.add_argument('--do_poincare', action='store_true', help='Whether to attempt Poincare plots of the phase diffs')
-    parser.add_argument('--p', action='store_true', help='Whether to correct for bkgrd stack offset')
+    parser.add_argument('--p', action='store_false', help='Whether to correct for bkgrd stack offset')
     parser.add_argument('--log', action='store_true', help='Whether to log data')
+    parser.add_argument('--latex', action='store_true', help='Whether to write latex table')
     parser.add_argument('--test_synthetic', action='store_true',
                         help='Whether to test some synthetic data to see how we compare')
     parser.add_argument('--data_path', type=str, default='data_paths')
-
     parser.add_argument('--save_folder', type=str,
                         default='figs',
                         help='Folder path for saving')
 
+    parser.add_argument('--prc_json_path', type=str, default='./saved_prc_normalized.json')
+    parser.add_argument('--before_path', type=str, default='./all_befores_from_experiments.pickle')
+    parser.add_argument('--after_path', type=str, default='./all_afters_from_experiments.pickle')
+    parser.add_argument('--simulation_trials', type=int, default=20)
+
+    # --- NEW: parameter grids for tanh PRC ---
+
+    parser.add_argument(
+        '--kappa_values', '--kappas', dest='kappa_values',
+        nargs='+', type=float,
+        default=list(np.arange(2.0, 22.0 + 1e-9, 2)),
+        help='κ sweep (start=2, stop=10, step=0.5)'
+    )
+    parser.add_argument(
+        '--phi_c_values', '--phic', dest='phi_c_values',
+        nargs='+', type=float,
+        default=list(np.arange(-0.3, 0.3 + 1e-9, 0.05)),
+        help='φ_c sweep (start=-0.10, stop=0.10, step=0.02)'
+    )
+    parser.add_argument(
+        '--ymax_values', '--ymax', dest='ymax_values',
+        nargs='+', type=float,
+        default=list(np.arange(0.0, 2.0 + 1e-9, 0.20)),
+        help='Y_max sweep (start=0.20, stop=1.20, step=0.10)'
+    )
+    parser.add_argument(
+        '--y0_values', '--y0', dest='y0_values',
+        nargs='+', type=float,
+        default=list(np.arange(0.5, 1.5 + 1e-9, 0.1)),
+        help='y0 sweep (start=0.7, stop=1.4, step=0.1)'
+    )
+    parser.add_argument(
+        '--led_periods_ms',
+        nargs='+', type=int,
+        default=[300, 400, 500, 600, 700, 770, 850, 1000],
+        help='List of LED periods (ms)'
+    )
+    parser.add_argument('--use_prc', action='store_true')
+    parser.add_argument('--show_heatmaps', action='store_true')
+    parser.add_argument('--show_param_summary', action='store_true')
+    parser.add_argument('--show_overlay', action='store_true')
+    parser.add_argument('--save_sim_figs', action='store_true')
+    parser.add_argument('--save_sim_data', action='store_true')
+    parser.add_argument('--simulation_save_path', type=str, default='sim_data')
     args = parser.parse_args()
 
     if args.write_timeseries:
@@ -106,3 +154,7 @@ if __name__ == '__main__':
         helpers.do_nonlinear_analysis(args)
     if args.investigate:
         investigate_timeseries(args)
+
+    if args.simulate:
+        saved_manifest_path = prc_simulator.simulate_from_prc(args)
+        print(saved_manifest_path)

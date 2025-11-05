@@ -25,6 +25,11 @@ from statsmodels.tools import add_constant
 
 import helpers
 
+from dataclasses import dataclass
+from scipy.optimize import least_squares
+from pathlib import Path
+
+
 
 DET_FILTER_LEVEL = 0.7
 LAM_FILTER_LEVEL = 0.7
@@ -50,7 +55,7 @@ def boxplots(all_befores, all_afters, plot_params):
 
     flierprops = dict(markerfacecolor='0.75', markersize=5,
                       linestyle='none')
-    colors = plt.cm.Spectral(np.linspace(0, 1, 24))  # Spectral colormap with 8 colors
+    colors = plt.cm.viridis_r(np.linspace(0, 1, 24))  # viridis colormap with 8 colors
 
     alphas = [0.6, 0.9]
     plt.figure(figsize=(12, 6))
@@ -134,10 +139,7 @@ def plot_recurrence_bouts(d, bgl):
             rr = m['rr']
             if np.isnan(det) or np.isnan(lam) or det == 0 or lam == 0:
                 continue
-            # if f"{key}<br>{round(m['start_idx'],3)}-{round(m['end_idx'],3)}" in bests:
-            #     k = 'best_10'
-            # if f"{key}<br>{round(m['start_idx'],3)}-{round(m['end_idx'],3)}" in worsts:
-            #     k = 'worst_10'
+
             if m['num_flashes'] > 3:
                 records.append({
                     "key": k,
@@ -152,7 +154,7 @@ def plot_recurrence_bouts(d, bgl):
     df = pd.DataFrame(records)
 
     # Create scatter plot with hover labels
-    colors = cm.Spectral(np.linspace(0, 1, 24))  # returns RGBA
+    colors = plt.cm.viridis_r(np.linspace(0, 1, 24))  # returns RGBA
     colors = [mcolors.to_hex(c) for c in colors]  # convert to hex strings
     colormap = {
         300: colors[2],
@@ -369,7 +371,7 @@ def plot_individual_treatment_prcs(results, flter=False, bout_gap_length=2.0):
         shifts = np.array(data["shifts"])
         phases = np.array(data["phases"]) / phase_max
         responses = np.array(data["responses"])
-        valid = (shifts > 0.5) & (shifts < 2.0)
+        valid = (~np.isnan(shifts)) & (shifts > 0.5) & (shifts < 2.0)
         if np.sum(valid) < 10:
             continue
 
@@ -397,7 +399,7 @@ def plot_individual_treatment_responses(results, flter=False, bout_gap_length=2.
         shifts = np.array(data["shifts"])
         phases = np.array(data["phases"]) / phase_max
         responses = np.array(data["responses"])
-        valid = (shifts > 0.5) & (shifts < 2.0)
+        valid = (~np.isnan(shifts)) & (shifts > 0.5) & (shifts < 2.0)
         if np.sum(valid) < 10: continue
 
         responses, phases = responses[valid], phases[valid]
@@ -450,7 +452,7 @@ def plot_grand_prc(results, flter=False, bout_gap_length=2.0):
 
     shifts = np.array(all_shifts)
     phases = np.array(all_phases)
-    valid = (shifts > 0.5) & (shifts < 2.0)
+    valid = (~np.isnan(shifts)) & (shifts > 0.5) & (shifts < 2.0)
     if np.sum(valid) < 10: return
 
     shifts, phases = shifts[valid], phases[valid]
@@ -468,7 +470,7 @@ def plot_combined_prc(results, flter=False, bout_gap_length=2.0):
     grouped = process_treatment_data(results, flter)
     plt.figure(figsize=(10, 8))
     treatment_keys = sorted(grouped.keys(), key=lambda x: int(x))
-    colors = plt.get_cmap('Spectral')(np.linspace(0, 1, len(treatment_keys)))
+    colors = plt.get_cmap('viridis_r')(np.linspace(0, 1, len(treatment_keys)))
     all_lines = []
 
     for i, (color, key) in enumerate(zip(colors, treatment_keys)):
@@ -479,7 +481,7 @@ def plot_combined_prc(results, flter=False, bout_gap_length=2.0):
             continue
         shifts = np.array(data["shifts"])
         phases = np.array(data["phases"]) / phase_max
-        valid = (shifts > 0.5) & (shifts < 2.0)
+        valid = (~np.isnan(shifts)) & (shifts > 0.5) & (shifts < 2.0)
         if np.sum(valid) < 10: continue
         shifts, phases = shifts[valid], phases[valid]
         bin_centers, means, *_ = compute_bin_summaries(phases, shifts)
@@ -523,7 +525,7 @@ def plot_combined_prc(results, flter=False, bout_gap_length=2.0):
                 all_shifts.extend(res["shifts"])
         shifts = np.array(all_shifts)
         phases = np.array(all_phases)
-        valid = (shifts > 0.5) & (shifts < 2.0)
+        valid = (~np.isnan(shifts)) & (shifts > 0.5) & (shifts < 2.0)
         shifts, phases = shifts[valid], phases[valid]
         bin_centers, means, *_ = compute_bin_summaries(phases, shifts)
         plt.plot(bin_centers, means, color='black', linewidth=4, label="Grand Mean")
@@ -550,7 +552,7 @@ def plot_prc_by_key(results, bgl):
 def plot_recurrence_stats(d):
     metrics_dict_s = d
     fig, ax = plt.subplots()
-    colors = cm.Spectral(np.linspace(0, 1, 24))  # Spectral colormap with 8 colors
+    colors = plt.cm.viridis_r(np.linspace(0, 1, 24))
 
     colormap = {
         300: colors[2],
@@ -723,7 +725,7 @@ def check_frame_rate(input_csv):
 
 def before_vs_mode_freq(rmses, plot_params):
     fig, ax = plt.subplots()
-    colormap = cm.get_cmap('Spectral', 21)
+    colormap = cm.get_cmap('viridis_r', 24)
     allxs = []
     allys = []
     for i, k in enumerate(rmses['mode_before'].keys()):
@@ -752,7 +754,7 @@ def before_vs_mode_freq(rmses, plot_params):
 
 def barbell_modes(rmses, plot_params):
     fig, ax = plt.subplots()
-    colormap = cm.get_cmap('Spectral', 21)
+    colormap = cm.get_cmap('viridis_r', 24)
     for i, k in enumerate(rmses['mode_before'].keys()):
         befores = []
         afters = []
@@ -829,7 +831,7 @@ def plot_autocorrelation(phases, title):
 def plot_alpha_vs_dist_period(dist_ps, alphas, keys):
     fig, ax = plt.subplots()
     xs = dist_ps
-    colormap = cm.get_cmap('Spectral', len(keys))
+    colormap = cm.get_cmap('viridis_r', len(keys))
     colors = [colormap(i) for i in range(len(keys))]
 
     ax.scatter(xs, alphas, color=colors, s=5, )
@@ -841,6 +843,60 @@ def plot_alpha_vs_dist_period(dist_ps, alphas, keys):
     plt.close()
 
 
+def format_data(pargs):
+    fpaths = os.listdir(pargs.data_path)
+
+    for fp in fpaths:
+        if fp == '.DS_Store':
+            continue
+        elif not os.path.isdir(pargs.data_path + '/' + fp):
+            path, framerate = check_frame_rate(pargs.data_path + '/' + fp)
+            if path is None:
+                continue
+
+            date = path.split('_')[1].split('/')[1]
+            key = path.split('_')[2]
+            index = path.split('_')[3].split('.')[0]
+
+            if pargs.log:
+                print(f'Writing timeseries from {date} with led freq {key}')
+            with open(path, 'r') as data_file:
+                ts = {'ff': [], 'led': []}
+                data = list(csv.reader(data_file))
+                if date[0] == '0':
+                    date = date[-4:] + date[:-4]
+                for line in data[1:]:
+                    try:
+                        ts['ff'].append(line[0])
+                        ts['led'].append(line[1])
+                    except IndexError:
+                        print(f'Error loading data with {fp}')
+
+                # Prepare time series data
+                ff_xs = np.array([float(eval(x)[0]) for x in ts['ff']])
+                ff_ys = np.array([0.0 if float(eval(x)[1]) == 0.0 else 0.5 for x in ts['ff']])
+                led_xs = np.array([float(eval(x)[0]) for x in ts['led']])
+                led_ys = np.array([0.5 if float(eval(x)[1]) == 1.0 else 0.502 for x in ts['led']])
+                led_xs_flashes = [x for x, y in zip(led_xs, led_ys) if y == 0.502]
+                ff_xs_flashes = [x for x, y in zip(ff_xs, ff_ys) if y == 0.5]
+
+                ff_all_times = {round(float(x), 6) for x in ff_xs}
+                led_all_times = {round(float(x), 6) for x in led_xs}
+                ff_flash_times = {round(float(x), 6) for x in ff_xs_flashes}
+                led_flash_times = {round(float(x), 6) for x in led_xs_flashes}
+
+                all_times = sorted(ff_all_times.union(led_all_times))
+
+                save_path = f"data_paths/formatted/f{date}_{key}_{index}.csv"
+                with open(save_path, 'w', newline='') as csvfile:
+                    writer = csv.writer(csvfile)
+                    writer.writerow(['timestamp', 'FF', 'LED'])
+                    for t in all_times:
+                        ff = 1 if t in ff_flash_times else 0
+                        led = 1 if t in led_flash_times else 0
+                        writer.writerow([t, ff, led])
+
+
 def write_timeseries_figs(pargs):
     #####
     # Write the timeseries figures path objects
@@ -850,6 +906,7 @@ def write_timeseries_figs(pargs):
     p_hases = {k: [] for k in keys}
     s_hifts = {k: [] for k in keys}
     fpaths = os.listdir(pargs.data_path)
+    #format_data(pargs)
     all_fits = {key: [] for key in keys}
     all_derivs = {key: [] for key in keys}
     all_phases = {key: [] for key in keys}
@@ -910,7 +967,9 @@ def write_timeseries_figs(pargs):
                 if pargs.re_norm:
                     phases = helpers.renorm_phases(phases)
 
-                phase_derivative = helpers.sliding_time_window_derivative(times, phases, window_seconds=3.0)
+                phase_derivative = helpers.sliding_time_window_derivative(times, phases,
+                                                                          float(key)/1000,
+                                                                          window_seconds=3.0)
 
                 valid_indices = [i for i, val in enumerate(phase_derivative) if val is not None]
                 valid_times = [times[i] for i in valid_indices]
@@ -918,6 +977,7 @@ def write_timeseries_figs(pargs):
                 all_derivs[key].append(valid_derivatives)
 
                 phase_acceleration = helpers.sliding_time_window_derivative(valid_times, valid_derivatives,
+                                                                            float(key)/1000,
                                                                             window_seconds=3.0)
                 valid_indices_2nd = [i for i, val in enumerate(phase_acceleration) if val is not None]
                 valid_times_2nd = [valid_times[i] for i in valid_indices_2nd]
@@ -936,7 +996,7 @@ def write_timeseries_figs(pargs):
                     y=[led_y_value] * len(led_xs[masked_led]),
                     mode='markers',
                     name='LED',
-                    marker=dict(color='orange', size=5)
+                    marker=dict(color='black', size=5)
                 )
 
                 trace1_ff = go.Scatter(
@@ -944,7 +1004,7 @@ def write_timeseries_figs(pargs):
                     y=[ff_y_value] * len(ff_xs[masked_ff]),
                     mode='markers',
                     name='Firefly',
-                    marker=dict(color='green', size=5)
+                    marker=dict(color='orange', size=5)
                 )
 
                 trace2 = go.Scatter(
@@ -1007,6 +1067,7 @@ def write_timeseries_figs(pargs):
 
                 fig.update_layout(
                     height=1200,
+                    plot_bgcolor='white',
                     width=800,
                     showlegend=False,
                     xaxis=dict(range=[x_min, x_max]),
@@ -1033,10 +1094,16 @@ def write_timeseries_figs(pargs):
                     }
                 )
 
-                fig.update_xaxes(title_text="Time (s)", row=1, col=1, showticklabels=True)
-                fig.update_xaxes(title_text="Time (s)", row=2, col=1, showticklabels=True)
-                fig.update_xaxes(title_text="Time (s)", row=3, col=1, showticklabels=True)
-                fig.update_xaxes(title_text="Time (s)", row=4, col=1, showticklabels=True)
+                fig.update_xaxes(title_text="Time (s)", row=1, col=1, showticklabels=True,
+                                 gridcolor='lightgrey'
+                                 )
+                fig.update_xaxes(title_text="Time (s)", row=2, col=1, showticklabels=True,
+                                 gridcolor='lightgrey')
+                fig.update_xaxes(title_text="Time (s)", row=3, col=1, showticklabels=True,
+                                 gridcolor='lightgrey'
+                                 )
+                fig.update_xaxes(title_text="Time (s)", row=4, col=1, showticklabels=True,
+                                 gridcolor='lightgrey')
 
                 config = {
                     'scrollZoom': True,
@@ -1087,7 +1154,7 @@ def write_timeseries_figs(pargs):
                         y=to_plot_shifts,
                         mode='markers',
                         name='Phase response curve',
-                        marker=dict(color='orange', size=5)
+                        marker=dict(color='black', size=5)
 
                     )
                     phase_response_trace_2 = go.Scatter(
@@ -1263,24 +1330,24 @@ def write_timeseries_figs(pargs):
                 # Plot led
                 fig.add_trace(
                     go.Scatter(x=led_xs[masked_led], y=led_ys[masked_led], mode='markers', name='LED',
-                               marker=dict(color='orange')),
+                               marker=dict(color='black')),
                     row=1, col=1
                 )
                 fig.add_trace(
                     go.Bar(x=led_xs[masked_led], y=led_ys[masked_led] - 0.5, name='LED',
-                           marker=dict(color='orange'), base=0.5),
+                           marker=dict(color='black'), base=0.5),
                     row=1, col=1,
                 )
 
                 # Plot firefly
                 fig.add_trace(
                     go.Scatter(x=ff_xs[masked_ff], y=ff_ys[masked_ff], name='FF', mode='markers',
-                               marker=dict(color='green')),
+                               marker=dict(color='orange')),
                     row=1, col=1
                 )
                 fig.add_trace(
                     go.Bar(x=ff_xs[masked_ff], y=ff_ys[masked_ff] - 0.498, name='FF',
-                           marker=dict(color='green'), base=0.498),
+                           marker=dict(color='orange'), base=0.498),
                     row=1, col=1
                 )
 
@@ -1306,7 +1373,89 @@ def write_timeseries_figs(pargs):
                 fig.write_html(pargs.save_folder + '/timeseries/LED_Period={}ms/{}_{}_{}__.html'.format(
                     key, date, key, index)
                 )
+    if pargs.latex:
+        latex_rows = []
+        for fp in fpaths:
+            if fp == '.DS_Store':
+                continue
+            path, framerate = check_frame_rate(pargs.data_path + '/' + fp)
+            if path is None:
+                continue
 
+            date = path.split('_')[1].split('/')[1]
+            key = path.split('_')[2]
+            index = path.split('_')[3].split('.')[0]
+            with open(path, 'r') as data_file:
+                ts = {'ff': [], 'led': []}
+                data = list(csv.reader(data_file))
+                if date[0] == '0':
+                    date = date[-4:] + date[:-4]
+                for line in data[1:]:
+                    try:
+                        ts['ff'].append(line[0])
+                        ts['led'].append(line[1])
+                    except IndexError:
+                        print(f'Error loading data with {fp}')
+
+                # Prepare time series data
+                ff_xs = np.array([float(eval(x)[0]) for x in ts['ff']])
+                ff_ys = np.array([0.0 if float(eval(x)[1]) == 0.0 else 0.5 for x in ts['ff']])
+                led_xs = np.array([float(eval(x)[0]) for x in ts['led']])
+                led_ys = np.array([0.5 if float(eval(x)[1]) == 1.0 else 0.502 for x in ts['led']])
+                led_xs_flashes = [x for x, y in zip(led_xs, led_ys) if y == 0.502]
+                ff_xs_flashes = [x for x, y in zip(ff_xs, ff_ys) if y == 0.5]
+
+                if not led_xs_flashes or not ff_xs_flashes:
+                    pre_led_duration = "N/A"
+                    post_led_duration = "N/A"
+                else:
+                    pre_led_duration = round(led_xs_flashes[0] - ff_xs_flashes[0], 2)
+                    post_led_duration = round(led_xs_flashes[-1] - led_xs_flashes[0], 2)
+
+                try:
+                    temp = helpers.get_temp_from_experiment_date(date, index)
+                except Exception:
+                    temp = "N/A"
+
+                year = date[:4]
+                month = date[4:6]
+                day = date[6:8]
+
+                row = [year, month, day, key, f"{temp}", f"{pre_led_duration}", f"{post_led_duration}"]
+                latex_rows.append((int(key), row))
+
+        # Sort by LED frequency
+        latex_rows.sort()
+
+        # Generate LaTeX
+        print("\\begin{table}[H]")
+        print("\\centering")
+        print("\\scriptsize")
+        print("\\caption{Experimental Metadata. All \\textbf{$T_{\\mathrm{LED}}$} values in milliseconds (ms).}")
+        print("\\label{table:table1}")
+        print("\\setlength{\\extrarowheight}{-0.8pt}")
+        print("\\begin{tabular}{")
+        print("|" + "|".join([">{\\centering\\arraybackslash}m{0.7cm}"] * 14) + "|}")
+        print("\\hline")
+        print("\\textbf{yyyy} & \\textbf{mm} & \\textbf{dd} & \\textbf{$T_{\\mathrm{LED}}$} & \\textbf{°C} & \\textbf{$t_{\\mathrm{pre}}$} & \\textbf{$t_{\\mathrm{post}}$} " * 2 + "\\\\")
+        print("\\hline")
+
+        # Output two rows per line
+        for i in range(0, len(latex_rows), 2):
+            left = latex_rows[i][1]
+            right = latex_rows[i + 1][1] if i + 1 < len(latex_rows) else [""] * 7
+            row = " & ".join(left + right) + " \\\\ \\hline"
+            print(row)
+
+        # Example frequency counts (edit or compute dynamically if needed)
+        print("\\multicolumn{14}{|c|}{")
+        print("\\textbf{N}: \\quad 300 (\\textbf{19}), 400 (\\textbf{13}), 500 (\\textbf{18}), 600 (\\textbf{17}),")
+        print(
+            "700 (\\textbf{18}), 770 (\\textbf{13}), 850 (\\textbf{15}), 1000 (\\textbf{14}), All (\\textbf{127})")
+        print("} \\\\ \\hline")
+
+        print("\\end{tabular}")
+        print("\\end{table}")
     plot_aggregate_fitted_prc(all_fits)
     plot_aggregate_phase_derivatives(all_derivs, all_phases)
 
@@ -1336,7 +1485,7 @@ def plot_aggregate_phase_derivatives(allderivs, all_phases):
     bin_min, bin_max = -0.5, 0.5
     bins = np.linspace(bin_min, bin_max, num_bins + 1)
     ps_fig, ps_ax = plt.subplots(len(ks), figsize=(10, 8), sharex=True)
-    colormap = cm.get_cmap('Spectral', len(ks) * 3)
+    colormap = cm.get_cmap('viridis_r', len(ks) * 3)
 
     max_height = 0
     # First pass: get max height with uniform bins (using filtered data)
@@ -1350,7 +1499,7 @@ def plot_aggregate_phase_derivatives(allderivs, all_phases):
     for i, key in enumerate(ks):
         filtered_derivs = filtered_derivs_by_group[key]
         current_ax = ps_ax[i] if len(ks) > 1 else ps_ax
-        color = 'yellow' if i == 4 else colormap(i * 3)
+        color = colormap(i * 3)
         if filtered_derivs:
             current_ax.hist(filtered_derivs, bins=bins, alpha=0.6, color=color, edgecolor='black', linewidth=0.5,
                             density=True)
@@ -1450,7 +1599,7 @@ def plot_statistics(rmses, ks, plot_params):
     all_befores = {}
     all_afters = {}
 
-    colormap = cm.get_cmap('Spectral', len(ks) * 3)
+    colormap = cm.get_cmap('viridis_r', len(ks) * 3)
 
     if plot_params.do_delay_plot:
         fig, axes = plt.subplots(len(ks))
@@ -1471,10 +1620,7 @@ def plot_statistics(rmses, ks, plot_params):
 
             axes[i].spines['top'].set_visible(False)
             axes[i].spines['right'].set_visible(False)
-            if i == 4:
-                color = 'yellow'
-            else:
-                color = colormap.__call__(i * 3)
+            color = colormap.__call__(i * 3)
 
             axes[i].plot(x, gaussian, color=color)
             axes[i].hist(all_delays, density=True, bins=np.arange(0.0, 1.0, 0.033), color=color, alpha=0.75)
@@ -1489,14 +1635,11 @@ def plot_statistics(rmses, ks, plot_params):
         plt.savefig(plot_params.save_folder + '/delay_distributions_hist_normalized')
         plt.close(fig)
 
-        colormap = cm.get_cmap('Spectral', len(ks) * 3)
+        colormap = cm.get_cmap('viridis_r', len(ks) * 3)
         fig, ax = plt.subplots(8)
 
         for i, k in enumerate(ks):
-            if i == 4:
-                color = 'yellow'
-            else:
-                color = colormap.__call__(i * 3)
+            color = colormap.__call__(i * 3)
             all_phases = []
             all_phase_shifts = []
             for ps_individual in rmses['phases'][k]:
@@ -1515,14 +1658,11 @@ def plot_statistics(rmses, ks, plot_params):
         from matplotlib.colors import LinearSegmentedColormap, to_rgb
         from scipy.stats import gaussian_kde
 
-        colormap = cm.get_cmap('Spectral', len(ks) * 3)
+        colormap = cm.get_cmap('viridis_r', len(ks) * 3)
         fig, ax = plt.subplots(8)
 
         for i, k in enumerate(ks):
-            if i == 4:
-                color = 'xkcd:sun yellow'
-            else:
-                color = colormap.__call__(i * 3)
+            color = colormap.__call__(i * 3)
             all_phases_ = []
             all_freqs_ = []
             for phase, freq,_ in rmses['phase_time_diffs'][k]:
@@ -1555,15 +1695,13 @@ def plot_statistics(rmses, ks, plot_params):
 
         plt.savefig(plot_params.save_folder + '/response_period_vs_delay')
         plt.close(fig)
-        colormap = plt.cm.get_cmap('Spectral', len(ks)*3)
+        colormap = plt.cm.get_cmap('viridis_r', len(ks)*3)
 
         # delay
         for i, k in enumerate(ks):
             fig, ax = plt.subplots(len(rmses['phase_time_diffs_instanced'][k]), figsize=(14, 16), sharex=True,
                                    gridspec_kw={'hspace': 0.4})
             color = colormap.__call__(i * 3)
-            if i == 4:
-                color = 'yellow'
             for kk, individual in enumerate(rmses['phase_time_diffs_instanced'][k]):
                 times = []
                 phases = []
@@ -1698,7 +1836,7 @@ def plot_statistics(rmses, ks, plot_params):
             ys = np.array([a[1] for a in all_delay_responses])
             all_all_delay_responses.extend(all_delay_responses)
 
-            bin_edges = np.arange(-0.5, 0.5 + bin_size, bin_size)
+            bin_edges = np.arange(0.0, 1.0 + bin_size, bin_size)
             bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
             binned_means = []
             binned_stds = []
@@ -1729,7 +1867,7 @@ def plot_statistics(rmses, ks, plot_params):
             if i != len(ks) - 1:
                 axes[i].xaxis.set_visible(False)
 
-            axes[i].set_xlim(-0.5, 0.5)
+            axes[i].set_xlim(0.0, 1.0)
             axes[i].set_ylim(-0.2, 0.2)
             axes[i].spines['top'].set_visible(False)
             axes[i].spines['right'].set_visible(False)
@@ -1744,7 +1882,7 @@ def plot_statistics(rmses, ks, plot_params):
         xs = np.array([a[0] for a in all_all_delay_responses])
         ys = np.array([a[1] for a in all_all_delay_responses])
 
-        bin_edges = np.arange(-0.5, 0.5 + bin_size, bin_size)
+        bin_edges = np.arange(0.0, 1.0 + bin_size, bin_size)
         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
         binned_means = []
@@ -1774,7 +1912,7 @@ def plot_statistics(rmses, ks, plot_params):
                 linewidth=linewidth
             )
 
-        axes.set_xlim(-0.533, 0.533)
+        axes.set_xlim(0.0, 1.0)
         axes.set_ylim(-0.2, 0.2)
         axes.spines['top'].set_visible(False)
         axes.spines['right'].set_visible(False)
@@ -1859,7 +1997,7 @@ def plot_statistics(rmses, ks, plot_params):
         axes.set_ylim(0.0, 6.0)
         axes.set_xlabel('T[s]')
         axes.set_ylabel('pdf')
-        plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_before_aggregate_all2024')
+        plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_before_aggregate_all2025')
         plt.close(fig)
 
         fig, axes = plt.subplots()
@@ -1964,10 +2102,7 @@ def plot_statistics(rmses, ks, plot_params):
             axes[i].spines['right'].set_visible(False)
             all_befores[k] = [x for x in all_befores[k] if not np.isnan(x)]
             all_afters[k] = [x for x in all_afters[k] if not np.isnan(x)]
-            if i == 4:
-                color = 'yellow'
-            else:
-                color = colormap.__call__(i * 3)
+            color = colormap.__call__(i * 3)
             axes[i].hist(all_befores[k], density=True, bins=np.arange(0.0, 2.0, 0.03), color='black', alpha=0.25)
             axes[i].hist(all_afters[k], density=True, bins=np.arange(0.0, 2.0, 0.03), color=color, alpha=0.75)
             if i != 0:
@@ -1986,12 +2121,18 @@ def plot_statistics(rmses, ks, plot_params):
         if plot_params.save_data:
             with open(plot_params.save_folder + '/all_befores_from_experiments.pickle', 'wb') as handle:
                 pickle.dump(all_befores, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            all_befores_list = []
+            for k in all_befores.keys():
+                li = [x for x in all_befores[k] if not np.isnan(x)]
+                all_befores_list.extend(str(li))
+            with open(plot_params.save_folder + '/single_firefly_intervals.csv', 'w') as csv_handle:
+                csv_handle.write('\n'.join(all_befores_list))
             with open(plot_params.save_folder + '/all_afters_from_experiments.pickle', 'wb') as handle:
                 pickle.dump(all_afters, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         axes[len(ks) - 1].set_xlabel('T[s]')
         fig.text(0.01, 0.5, 'pdf', va='center', rotation='vertical')
-        plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2025_windowed_beforeafter_w_lines')
+        plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2025_windowed_beforeafter_w_linesyes')
         plt.close(fig)
 
         if plot_params.do_boxplots:
@@ -2010,10 +2151,7 @@ def plot_statistics(rmses, ks, plot_params):
             axes[i].spines['top'].set_visible(False)
             axes[i].spines['right'].set_visible(False)
             all_afters[k] = [x for x in all_afters[k] if not np.isnan(x)]
-            if i == 4:
-                color = 'yellow'
-            else:
-                color = colormap.__call__(i * 3)
+            color = colormap.__call__(i * 3)
             axes[i].hist(all_afters[k], density=True, bins=np.arange(0.0, 2.0, 0.03), color=color, alpha=0.75)
             if i != 0:
                 axes[i].axvline(float(k) / 1000, color='black')
@@ -2033,6 +2171,89 @@ def plot_statistics(rmses, ks, plot_params):
         plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2025_windowed_after_w_lines')
         plt.close(fig)
 
+        fig, axes = plt.subplots(len(ks) + 1, figsize=(12, 8))
+        all_befores = []
+
+        for kk in rmses['windowed_period_before'].keys():
+            for individual in rmses['windowed_period_before'][kk]:
+                try:
+                    all_befores.extend(individual)
+                except TypeError:
+                    all_befores.append(individual)
+
+        axes[0].hist(all_befores, density=True, bins=np.arange(0.0, 2.0, 0.03), color='gray', alpha=0.75)
+
+        axes[0].spines['top'].set_visible(False)
+        axes[0].spines['right'].set_visible(False)
+        axes[0].grid(False)
+        axes[0].tick_params(axis='both', which='both', length=0)
+        axes[0].set_xlim(0.0, 2.05)
+        axes[0].set_ylim(0.0, 6.0)
+        for i, k in enumerate(ks):
+            axes[i + 1].grid(False)
+            axes[i + 1].tick_params(axis='both', which='both', length=0)
+            all_afters[k] = []
+            for individual in rmses['windowed_period_after'][k]:
+                try:
+                    all_afters[k].extend(individual)
+                except TypeError:
+                    all_afters[k].append(individual)
+
+            axes[i + 1].spines['top'].set_visible(False)
+            axes[i + 1].spines['right'].set_visible(False)
+            all_afters[k] = [x for x in all_afters[k] if not np.isnan(x)]
+            color = colormap.__call__(i * 3)
+            axes[i + 1].hist(all_afters[k], density=True, bins=np.arange(0.0, 2.0, 0.03), color=color, alpha=0.75)
+            if i != 0:
+                axes[i + 1].axvline(float(k) / 1000, color='black')
+                axes[i + 1].axvline(0.5 * (float(k) / 1000), color='black', linestyle='--')
+                axes[i + 1].axvline(2.0 * (float(k) / 1000), color='black', linestyle=':')
+            else:
+                axes[i + 1].axvline(float(k) / 1000, color='black', label='LED period')
+                axes[i + 1].axvline(0.5 * (float(k) / 1000), color='black', linestyle='--', label='0.5 * LED period')
+                axes[i + 1].axvline(2.0 * (float(k) / 1000), color='black', linestyle=':', label='2.0 * LED period')
+            if i != len(ks):
+                axes[i].xaxis.set_visible(False)
+            axes[i + 1].set_xlim(0.0, 2.05)
+            axes[i + 1].set_ylim(0.0, 6.0)
+        axes[len(ks)].set_xlabel('T[s]')
+        fig.text(0.01, 0.5, 'pdf', va='center', rotation='vertical')
+        plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2025_windowed_after_w_lines_and_top')
+        plt.close(fig)
+
+        fig, axes = plt.subplots(len(ks), figsize=(10, 8))
+        for i, k in enumerate(ks):
+            axes[i].grid(False)
+            axes[i].tick_params(axis='both', which='both', length=0)
+            all_befores[k] = []
+            all_afters[k] = []
+            for individual in rmses['windowed_period_after'][k]:
+                try:
+                    all_afters[k].extend(individual)
+                except TypeError:
+                    all_afters[k].append(individual)
+            for individual in rmses['windowed_period_before'][k]:
+                try:
+                    all_befores[k].extend(individual)
+                except TypeError:
+                    all_befores[k].append(individual)
+            axes[i].spines['top'].set_visible(False)
+            axes[i].spines['right'].set_visible(False)
+            all_befores[k] = [x for x in all_befores[k] if not np.isnan(x)]
+            all_afters[k] = [x for x in all_afters[k] if not np.isnan(x)]
+            color = colormap.__call__(i * 3)
+            axes[i].hist(all_befores[k], density=True, bins=np.arange(0.0, 2.0, 0.03), color='black', alpha=0.25)
+            axes[i].hist(all_afters[k], density=True, bins=np.arange(0.0, 2.0, 0.03), color=color, alpha=0.75)
+            if i != len(ks) - 1:
+                axes[i].xaxis.set_visible(False)
+            axes[i].set_xlim(0.0, 2.05)
+            axes[i].set_ylim(0.0, 6.0)
+
+        axes[len(ks) - 1].set_xlabel('T[s]')
+        fig.text(0.01, 0.5, 'pdf', va='center', rotation='vertical')
+        plt.savefig(plot_params.save_folder + '/LED_period_firefly_period_2025_windowed_beforeafter_without_lines')
+        plt.close(fig)
+
         fig, axes = plt.subplots(len(ks), figsize=(10, 8))
         for i, k in enumerate(ks):
             axes[i].grid(False)
@@ -2046,10 +2267,7 @@ def plot_statistics(rmses, ks, plot_params):
             axes[i].spines['top'].set_visible(False)
             axes[i].spines['right'].set_visible(False)
             all_afters[k] = [x for x in all_afters[k] if not np.isnan(x)]
-            if i == 4:
-                color = 'yellow'
-            else:
-                color = colormap.__call__(i * 3)
+            color = colormap.__call__(i * 3)
             axes[i].hist(all_afters[k], density=True, bins=np.arange(0.0, 2.0, 0.03), color=color, alpha=0.75)
             if i != len(ks) - 1:
                 axes[i].xaxis.set_visible(False)
@@ -2087,10 +2305,7 @@ def plot_statistics(rmses, ks, plot_params):
                                           np.nanpercentile(all_before, 50) + (np.nanstd(all_before) / 2),
                 facecolor='black', alpha=0.2
             )
-            if i == 4:
-                color = 'yellow'
-            else:
-                color = colormap.__call__(i * 3)
+            color = colormap.__call__(i * 3)
             axes[i].hist(all_afters[k], density=True, bins=np.arange(0.0, 3.0, 0.03), color=color)
             if i != 0:
                 axes[i].axvline(float(k) / 1000, color='black')
@@ -2109,6 +2324,7 @@ def plot_statistics(rmses, ks, plot_params):
         axes[int(len(ks) / 2)].set_ylabel('pdf')
         plt.savefig(plot_params.save_folder + '/LED_period_firefly_windowed_period_2025_w_aggregatebefore_after')
         plt.close(fig)
+        print('here')
 
     if plot_params.do_scatter_overall_stats:
         fig,ax = plt.subplots()
@@ -2128,3 +2344,1330 @@ def plot_statistics(rmses, ks, plot_params):
         plt.legend()
         plt.savefig(plot_params.save_folder + '/summary')
         plt.close(fig)
+
+
+def inflection_score(phases, cycle_length, stability_thresh=0.05, min_region_len=5):
+    """
+    Compute a score based on variance difference before and after a stability transition
+    in phase values. Detects both stable→unstable and unstable→stable inflections.
+
+    Parameters:
+    - phases: list or array of phase values (can be circular, normalized [0,1] or radians).
+    - cycle_length: normalization constant for circular difference (e.g., 1.0 or 2π).
+    - stability_thresh: threshold for smoothed circular difference to define stability.
+    - min_region_len: minimum number of points required on both sides of a transition.
+
+    Returns:
+    - best_score: float indicating max variance difference across a valid inflection.
+    """
+    if len(phases) < 2 * min_region_len + 1:
+        return 0.0
+
+    phases = np.array(phases)
+    dphi = helpers.circular_diff(phases, cycle_length)
+    smooth = np.convolve(np.abs(dphi), np.ones(3) / 3, mode='valid')
+    is_stable = smooth < stability_thresh
+
+    # Find both types of transitions: up (unstable → stable), down (stable → unstable)
+    transitions = np.where(np.diff(is_stable.astype(int)) != 0)[0] + 1
+
+    best_score = 0.0
+
+    for idx in transitions:
+        pre_start = idx - min_region_len
+        post_end = idx + min_region_len
+        if pre_start < 0 or post_end > len(phases):
+            continue
+
+        pre_var = helpers.circular_variance(phases[pre_start:idx], cycle_length)
+        post_var = helpers.circular_variance(phases[idx:post_end], cycle_length)
+
+        score = pre_var - post_var
+        best_score = max(best_score, abs(score))
+
+    return best_score
+
+
+def inflection_points(metrics_dict, bout_gap_length, top_n=10, num_flashes=5):
+    bouts = []
+    for key, bouts_list in metrics_dict[bout_gap_length].items():
+        for bout in bouts_list:
+            if bout['det'] > 0.1 and bout['lam'] > 0.1 and bout['num_flashes'] > num_flashes:
+                score = inflection_score(bout['phases'], float(key) / 1000)
+                bouts.append((key, bout, score, bout['num_flashes']))
+    colormap = cm.get_cmap('viridis_r', 24)
+    grouped = defaultdict(list)
+    for bout in bouts:
+        name = bout[0]
+        middle_number = name.split('_')[1]
+        grouped[middle_number].append(bout)
+
+    # Sort each group descending by the third element
+    for key in grouped:
+        grouped[key].sort(key=lambda x: x[2], reverse=True)
+    fig, axes = plt.subplots(figsize=(10, 10))
+
+    top_bouts_per_freq = {'300': [], '400': [], '500': [], '600': [], '700': [], '770': [], '850': [], '1000': []}
+    for i, (group_key, group_bouts) in enumerate(sorted(grouped.items(), key=lambda item: int(item[0]))):
+        top = group_bouts[:top_n]
+        top_bouts_per_freq[group_key].extend(top)
+
+    all_phases = []
+    all_shifts = []
+    for i, group_key in enumerate(top_bouts_per_freq.keys()):
+        print(i, group_key)
+        print('here!!')
+        group_bouts = top_bouts_per_freq[group_key]
+        phases = [y for x in group_bouts for y in x[1]['phases']]
+        shifts = [y for x in group_bouts for y in x[1]['shifts']]
+        p_hases = []
+        s_hifts = []
+
+        color = colormap(i * 3)
+
+        for p, s in zip(phases, shifts):
+            if s < 3.0:
+                p_hases.append(p)
+                s_hifts.append(s)
+
+        p_hases = np.array(p_hases)
+        p_hases = helpers.improved_circular_normalize(p_hases, float(group_key) / 1000)[0]
+        if not isinstance(p_hases, np.ndarray):
+            p_hases = np.array(p_hases)
+        s_hifts = np.array([np.nan if s is None else s for s in s_hifts], dtype=float)
+        valid_mask = ~np.isnan(s_hifts)
+        p_hases = p_hases[valid_mask]
+        s_hifts = s_hifts[valid_mask]
+        all_phases.extend(p_hases)
+        all_shifts.extend(s_hifts)
+        sorted_indices = np.argsort(p_hases)
+        p_hases_sorted = p_hases[sorted_indices]
+        s_hifts_sorted = s_hifts[sorted_indices]
+        bins = np.linspace(min(p_hases_sorted), max(p_hases_sorted), 20)
+        bin_centers = 0.5 * (bins[1:] + bins[:-1])
+        medians = []
+        for i in range(1, len(bins)):
+            in_bin = (p_hases_sorted >= bins[i - 1]) & (p_hases_sorted < bins[i])
+            if np.any(in_bin):
+                medians.append(np.median(s_hifts_sorted[in_bin]))
+
+            else:
+                medians.append(np.nan)
+
+        medians = np.array(medians)
+
+        # Smooth with rolling average first (this will retain NaNs at gaps)
+        medians_smooth = pd.Series(medians).rolling(window=5, center=True, min_periods=1).mean()
+
+        # Plot
+        axes.plot(bin_centers, medians_smooth, color=color)
+        # ax.plot(unique_phases, medians, color=color)
+        # ax.scatter(p_hases, s_hifts, color=color, s=7)
+        axes.axhline(1.0, color='black', linestyle='--')
+        axes.spines['top'].set_visible(False)
+    all_phases = np.array(all_phases)
+    all_shifts = np.array(all_shifts)
+
+    # Sort
+    sorted_indices = np.argsort(all_phases)
+    p_hases_sorted = all_phases[sorted_indices]
+    s_hifts_sorted = all_shifts[sorted_indices]
+
+    bins = np.linspace(0, 1, 20)
+    bin_centers = 0.5 * (bins[1:] + bins[:-1])
+
+    medians = []
+    for i in range(1, len(bins)):
+        in_bin = (p_hases_sorted >= bins[i - 1]) & (p_hases_sorted < bins[i])
+        if np.any(in_bin):
+            medians.append(np.median(s_hifts_sorted[in_bin]))
+        else:
+            medians.append(np.nan)
+
+    medians = np.array(medians)
+
+    # Smooth and fill nan
+    medians_smooth = pd.Series(medians).rolling(window=5, center=True, min_periods=1).mean()
+    # axes2 = axes.twinx()  # create a second y-axis that shares the same x-axis
+
+    # Plot thick black average
+    axes.plot(bin_centers, medians_smooth, color='black', linewidth=7, label='Overall average')
+    # axes2.set_ylim(0.99, 1.027)
+    # axes2.set_ylabel('Overall PRC')
+    axes.set_ylabel(r'$\frac{T_{i+1}}{T_i}$', labelpad=30, rotation='vertical', fontsize=20)
+    axes.set_xlabel('Phase difference between firefly and driving signal [s]')
+    plt.tight_layout()
+    plt.savefig('figs/prcs_{}_sameaxis_inflections.png'.format(bout_gap_length))
+    plt.close()
+
+
+def top_bottom_aggregate_statistics(metrics_dict, bout_gap_length, top_n=10, num_flashes=5):
+    bouts = []
+    for key, bouts_list in metrics_dict[bout_gap_length].items():
+        for bout in bouts_list:
+            if bout['det'] > 0.1 and bout['lam'] > 0.1 and bout['num_flashes'] > num_flashes:
+                score = bout['det'] + bout['lam']
+                bouts.append((key, bout, score, bout['num_flashes']))
+
+    grouped = defaultdict(list)
+    for bout in bouts:
+        name = bout[0]
+        middle_number = name.split('_')[1]
+        grouped[middle_number].append(bout)
+
+    # Sort each group descending by the third element
+    for key in grouped:
+        grouped[key].sort(key=lambda x: x[2], reverse=True)
+
+    num_groups = len(grouped)
+    colormap = cm.get_cmap('viridis_r', 24)
+    fig, axes = plt.subplots(num_groups, 1, figsize=(10, 10), sharex=True)
+    if num_groups == 1:
+        axes = [axes]
+
+    for i, (ax, (group_key, group_bouts)) in enumerate(
+            zip(axes, sorted(grouped.items(), key=lambda item: int(item[0])))):
+        top = group_bouts[:top_n]
+        bottom = group_bouts[-top_n:]
+        color = colormap(i * 3)
+
+        phase_derivs = []
+        for bout in top:
+            phase_derivs.extend(helpers.circular_diff(bout[1]['phases'], float(group_key) / 1000))
+        ax.hist(phase_derivs, density=True, bins=np.arange(-0.51, 0.51, 0.033), color=color, alpha=0.6)
+        phase_derivs = []
+        for bout in bottom:
+            phase_derivs.extend(helpers.circular_diff(bout[1]['phases'], float(group_key) / 1000))
+        ax.hist(phase_derivs, density=True, bins=np.arange(-0.51, 0.51, 0.033), color='black', alpha=0.6)
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+
+    axes[-1].set_xlabel(r'Circular Phase Derivative $\frac{d\phi}{dt}$ (s$^{-1}$)', fontsize=12)
+    fig.text(0.01, 0.5, 'pdf', va='center', rotation='vertical')
+    plt.tight_layout()
+    plt.savefig('figs/phase_derivs_topbottom_{}.png'.format(bout_gap_length))
+    plt.close()
+    fig, axes = plt.subplots(num_groups, 1, figsize=(10, 10), sharex=True)
+    if num_groups == 1:
+        axes = [axes]
+
+    top_bouts_per_freq = {'300': [],'400': [], '500': [], '600': [], '700': [], '770': [],'850': [], '1000': []}
+    for i, (ax, (group_key, group_bouts)) in enumerate(
+            zip(axes, sorted(grouped.items(), key=lambda item: int(item[0])))):
+        top = group_bouts[:top_n]
+        top_bouts_per_freq[group_key].extend(top)
+        bottom = group_bouts[-top_n:]
+        color = colormap(i * 3)
+
+        phase_derivs = []
+        for bout in top:
+            phase_derivs.extend(helpers.circular_diff_normalized(bout[1]['phases'], float(group_key) / 1000))
+        ax.hist(phase_derivs, density=True, bins=np.arange(-0.51, 0.51, 0.05), color=color, alpha=0.6)
+        phase_derivs = []
+        for bout in bottom:
+            phase_derivs.extend(helpers.circular_diff_normalized(bout[1]['phases'], float(group_key) / 1000))
+        ax.hist(phase_derivs, density=True, bins=np.arange(-0.51, 0.51, 0.05), color='black', alpha=0.6)
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+
+    axes[-1].set_xlabel(r'Normalized Circular Phase Derivative $\frac{d\phi}{dt}$ (s$^{-1}$)', fontsize=12)
+    fig.text(0.01, 0.5, 'pdf', va='center', rotation='vertical')
+    plt.tight_layout()
+    plt.savefig('figs/phase_derivs_topbottom_{}_normalized.png'.format(bout_gap_length))
+    plt.close()
+
+    fig, axes = plt.subplots(len(grouped), 1, figsize=(10, 10), sharex=True)
+    if len(grouped) == 1:
+        axes = [axes]
+    sorted_group_keys = sorted(grouped.keys(), key=lambda x: int(x))
+
+    for i, (ax, group_key) in enumerate(zip(axes, sorted_group_keys)):
+        group_bouts = grouped[group_key]
+        top = group_bouts[:top_n]
+        bottom = group_bouts[-top_n:]
+        color = 'xkcd:sun yellow' if i == 4 else colormap(i * 3)
+        top_responses = [r for bout in top for r in bout[1].get('responses', [])]
+        bottom_responses = [r for bout in bottom for r in bout[1].get('responses', [])]
+
+        ax.hist(top_responses, bins=np.arange(0.0, 2.0, 0.03), density=True,
+                color=color, alpha=0.6, label='Top 10')
+        ax.hist(bottom_responses, bins=np.arange(0.0, 2.0, 0.03), density=True,
+                color='black', alpha=0.6, label='Bottom 10')
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+
+        y_value = float(group_key) / 1000
+        ax.axvline(x=y_value, color='black', linestyle='-', linewidth=3)
+        y_value = float(group_key) / 2000
+        ax.axvline(x=y_value, color='black', linestyle='--', linewidth=1)
+        y_value = float(group_key) / 500
+        ax.axvline(x=y_value, color='black', linestyle='-', linewidth=1)
+
+        ax.set_ylabel('pdf')
+
+    axes[-1].set_xlabel('Firefly induced period [s]')
+    plt.tight_layout()
+    plt.savefig('figs/period_responses_topbottom_{}.png'.format(bout_gap_length))
+    plt.close()
+    fig, ax, results = analyze_firefly_led_synchronization(grouped)
+    print_sync_statistics(results)
+
+
+def analyze_firefly_led_synchronization(grouped, figsize=(12, 8)):
+    """
+    Analyze synchronization between firefly and LED signals
+    Creates a figure similar to the target showing phase relationships
+    """
+    from pathlib import Path
+
+    # ---------------- knobs ----------------
+    SAVE_DIR = "figs"
+    figsize = (9, 5)
+    MIN_ISI = 0.30
+    exclude = 5
+    thresh = 2.0
+    n_bins = 35
+    phase_edges = np.linspace(-0.5, 0.5, n_bins + 1)
+    phase_centers_global = 0.5 * (phase_edges[:-1] + phase_edges[1:])
+    tol = 1e-3  # 1 ms tolerance for boundary comparisons
+
+    # LED selection within a firefly cycle:
+    # "first": keep the first LED strictly inside (t_prev, t_next)
+    # "midpoint": keep the LED inside (t_prev, t_next) nearest the mid-cycle time
+    SELECTION_MODE = "midpoint"  # or "midpoint"
+
+    def _wrap_half(x):
+        return x - np.floor(x + 0.5)
+
+    # ---------------- pass 1: per-frequency curves ----------------
+    sorted_keys = sorted(grouped.keys(), key=lambda x: float(x))
+    colors = plt.cm.viridis_r(np.linspace(0, 1, len(sorted_keys)))
+
+    all_results = {}
+
+    for ci, freq in enumerate(sorted_keys):
+        print(f"Processing {freq} ms frequency...")
+        color = colors[ci]
+        led_period = float(freq) / 1000.0
+
+        phases = []
+        ratios = []
+        flash_counts = []
+
+        for j, trial in enumerate(grouped[freq]):
+            try:
+                f_times = np.asarray(trial[1]['full_timeseries']['firefly'], dtype=float)
+                l_times = np.asarray(trial[1]['full_timeseries']['led'], dtype=float)
+                start = float(trial[1]['start_idx'])
+                end = float(trial[1]['end_idx'])
+
+                if int(trial[1]['num_flashes']) < exclude:
+                    continue
+
+                # we only consider LED pulses that occur in the window
+                l_win = l_times[(l_times >= start) & (l_times <= end)]
+                if f_times.size < 3 or l_win.size == 0:
+                    continue
+                flash_counts.append(trial[1]['num_flashes'])
+
+                # -------- one LED per firefly cycle --------
+                # iterate over *firefly cycles* that overlap the LED window
+                # i goes from the 2nd flash to the penultimate flash (so we have prev & next)
+                for idx_prev in range(1, f_times.size - 1):
+                    t_prevprev = f_times[idx_prev - 1]
+                    t_prev = f_times[idx_prev]
+                    t_next = f_times[idx_prev + 1]
+
+                    # skip cycles that lie completely outside the LED window
+                    if (t_next <= start) or (t_prev >= end):
+                        continue
+
+                    T_prev = t_prev - t_prevprev
+                    T_next = t_next - t_prev
+                    if (T_prev < MIN_ISI) or (T_next < MIN_ISI):
+                        continue
+                    if T_next >= thresh * led_period:
+                        continue
+
+                    # LEDs strictly inside the cycle (with tolerance)
+                    m = (l_win > t_prev + tol) & (l_win < t_next - tol)
+                    leds_inside = l_win[m]
+                    if leds_inside.size == 0:
+                        continue
+
+                    if SELECTION_MODE == "first":
+                        L = leds_inside[0]
+                    elif SELECTION_MODE == "midpoint":
+                        mid = 0.5 * (t_prev + t_next)
+                        L = leds_inside[np.argmin(np.abs(leds_inside - mid))]
+                    else:
+                        L = leds_inside[0]  # default
+
+                    # phase relative to the *ongoing* cycle
+                    phi = _wrap_half((t_prev - L) / T_prev)  # [-0.5, 0.5)
+                    phases.append(phi)
+
+                    # ordinate: next/prev ratio
+                    ratios.append(T_next / T_prev)
+
+            except Exception:
+                continue
+
+        if len(phases) == 0:
+            continue
+
+        # bin to global edges
+        phases = np.asarray(phases, float)
+        ratios = np.asarray(ratios, float)
+        good = np.isfinite(phases) & np.isfinite(ratios) & (phases >= -0.5) & (phases < 0.5)
+        phases = phases[good];
+        ratios = ratios[good]
+
+        bin_idx = np.digitize(phases, phase_edges, right=False) - 1
+        bin_idx = np.clip(bin_idx, 0, n_bins - 1)
+
+        y_mean = np.full(n_bins, np.nan, float)
+        y_sem = np.full(n_bins, np.nan, float)
+        n_per = np.zeros(n_bins, int)
+
+        for b in range(n_bins):
+            m = (bin_idx == b)
+            if np.any(m):
+                vals = ratios[m]
+                y_mean[b] = np.mean(vals)
+                y_sem[b] = np.std(vals, ddof=1) / np.sqrt(vals.size) if vals.size >= 2 else 0.0
+                n_per[b] = vals.size
+
+        valid = np.isfinite(y_mean)
+        if not np.any(valid):
+            continue
+
+        all_results[freq] = {
+            "color": color,
+            "x": phase_centers_global[valid],
+            "y": y_mean[valid],
+            "sem": y_sem[valid],
+            "n": n_per[valid],
+            "counts_full": n_per.copy(),
+        }
+
+    # ---------------- Figure A: combined ----------------
+    fig_comb, ax_comb = plt.subplots(figsize=figsize)
+    for freq in sorted(all_results.keys(), key=lambda x: float(x)):
+        rec = all_results[freq]
+        ax_comb.plot(
+            rec["x"], rec["y"],
+            marker='o', linestyle='-', linewidth=2, markersize=7,
+            color=rec["color"], markerfacecolor=rec["color"], markeredgecolor='black',
+            alpha=0.95, label=f'{freq} ms'
+        )
+    ax_comb.axhline(1.0, color='black', linestyle='--', alpha=0.5, linewidth=1)
+    ax_comb.axvline(0.0, color='black', linestyle='-', alpha=0.3, linewidth=1)
+    ax_comb.set_xlim(-0.5, 0.5)
+    ax_comb.set_xlabel('Firefly - LED Phase (- firefly before, + firefly after)')
+    ax_comb.set_ylabel('Period change (T_next / T_prev)')
+    ax_comb.set_title('PRC (ratio) — Combined')
+    ax_comb.grid(True, alpha=0.3)
+    if len(all_results) <= 20:
+        ax_comb.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
+    fig_comb.tight_layout()
+
+    if SAVE_DIR:
+        Path(SAVE_DIR).mkdir(parents=True, exist_ok=True)
+        fig_comb.savefig(Path(SAVE_DIR) / "prc_ratio_combined.png", dpi=200)
+
+    # ---------------- Figure B: per-frequency ----------------
+    for freq in sorted(all_results.keys(), key=lambda x: float(x)):
+        rec = all_results[freq]
+        fig_i, ax_i = plt.subplots(figsize=figsize)
+        ax_i.plot(
+            rec["x"], rec["y"],
+            marker='o', linestyle='-', linewidth=2, markersize=7,
+            color=rec["color"], markerfacecolor=rec["color"], markeredgecolor='black',
+            alpha=0.95
+        )
+        ax_i.axhline(1.0, color='black', linestyle='--', alpha=0.5, linewidth=1)
+        ax_i.axvline(0.0, color='black', linestyle='-', alpha=0.3, linewidth=1)
+        ax_i.set_xlim(-0.5, 0.5)
+        ax_i.set_xlabel('Firefly - LED Phase (- firefly before, + firefly after)')
+        ax_i.set_ylabel('Period change (T_next / T_prev)')
+        ax_i.set_title(f'{freq} ms LED — PRC')
+        ax_i.grid(True, alpha=0.3)
+        fig_i.tight_layout()
+        if SAVE_DIR:
+            fig_i.savefig(Path(SAVE_DIR) / f"prc_ratio_{int(float(freq))}ms.png", dpi=200)
+
+    # ---------------- Figure C: grand mean (weighted) ----------------
+    weights = np.zeros(n_bins, float)
+    weighted_sum = np.zeros(n_bins, float)
+
+    for rec in all_results.values():
+        # map rec["x"] back to global bin indices
+        for xk, yk, nk in zip(rec["x"], rec["y"], rec["n"]):
+            b = np.where(np.isclose(phase_centers_global, xk, atol=1e-12))[0]
+            if b.size:
+                bi = int(b[0])
+                weighted_sum[bi] += yk * nk
+                weights[bi] += nk
+
+    with np.errstate(invalid='ignore', divide='ignore'):
+        mean_line = np.where(weights > 0, weighted_sum / weights, np.nan)
+
+    valid_mean = np.isfinite(mean_line)
+
+    fig_mean, ax_mean = plt.subplots(figsize=figsize)
+    ax_mean.plot(
+        phase_centers_global[valid_mean], mean_line[valid_mean],
+        linewidth=3, linestyle='-', color='black', alpha=0.95, label='Mean PRC'
+    )
+    ax_mean.axhline(1.0, color='black', linestyle='--', alpha=0.5, linewidth=1)
+    ax_mean.axvline(0.0, color='black', linestyle='-', alpha=0.3, linewidth=1)
+    ax_mean.set_xlim(-0.5, 0.5)
+    ax_mean.set_xlabel('Firefly - LED Phase (- firefly before, + firefly after)')
+    ax_mean.set_ylabel('Period change (T_next / T_prev)')
+    ax_mean.set_title('PRC, average over all LED frequencies')
+    ax_mean.grid(True, alpha=0.3)
+    fig_mean.tight_layout()
+    if SAVE_DIR:
+        fig_mean.savefig(Path(SAVE_DIR) / "prc_ratio_mean.png", dpi=200)
+
+    if SAVE_DIR:
+        out_dir = Path(SAVE_DIR)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        combined_path = out_dir / "prc_ratio_all.csv"
+        with combined_path.open("w", newline="") as f_all:
+            w_all = csv.writer(f_all)
+            w_all.writerow(["led_ms", "phase", "ratio", "sem", "n"])
+            for freq in sorted(all_results.keys(), key=lambda x: float(x)):
+                rec = all_results[freq]
+                per_path = out_dir / f"prc_ratio_{int(float(freq))}ms.csv"
+                with per_path.open("w", newline="") as f_one:
+                    w_one = csv.writer(f_one)
+                    w_one.writerow(["phase", "ratio", "sem", "n"])
+                    for p, r, s, nn in zip(rec["x"], rec["y"], rec["sem"], rec["n"]):
+                        w_one.writerow([f"{p:.9f}", f"{r:.9f}", f"{s:.9f}", int(nn)])
+                        w_all.writerow([int(float(freq)), f"{p:.9f}", f"{r:.9f}", f"{s:.9f}", int(nn)])
+
+        print(f"[PRC] wrote CSVs to {out_dir}")
+
+    return fig_mean, ax_mean, all_results
+
+
+def print_sync_statistics(results):
+    """Print summary statistics of synchronization analysis"""
+    print("\nSynchronization Analysis Summary:")
+    print("=" * 50)
+
+    for freq, data in results.items():
+        phase_diff = data['phase_diff']
+        inter_flash = data['inter_flash']
+        response_delay = data['response_delay']
+
+        print(f"\n{freq} ms LED frequency:")
+        print(f"  Data points: {len(phase_diff)}")
+        print(f"  Phase difference range: {np.min(phase_diff):.1f} to {np.max(phase_diff):.1f} ms")
+        print(f"  Mean inter-flash interval: {np.mean(inter_flash):.1f} ± {np.std(inter_flash):.1f} ms")
+        print(f"  Mean response delay: {np.mean(response_delay):.1f} ± {np.std(response_delay):.1f} ms")
+        print(f"  Mean flashes per bout: {data['flashes_per_bout']}")
+
+        # Calculate correlation between phase and response
+        correlation = np.corrcoef(phase_diff, response_delay)[0, 1]
+        print(f"  Phase-response correlation: {correlation:.3f}")
+
+
+def plot_hist_and_heatmap_per_led(
+    LED_PERIODS_MS,
+    heatmaps,                  # dict[p_ms] -> 3D array [len(K1), len(K2), len(BETA)]
+    best_params,               # dict[p_ms] -> {"k1","k2","beta_scale","dist","hist"}
+    exp_samples_by_led,        # dict[p_ms] -> 1D samples (ms)
+    BINS_MS,                   # 1D array of bin edges (ms)
+    K1_VALUES,                 # list/1D array of k1 grid (descending → 0)
+    K2_VALUES,                 # list/1D array of k2 grid (increasing → 0)
+    BETA_SCALES,               # list/1D array of β scales
+    save_path=None,            # directory or None
+    savefigs=False,            # save instead of show
+):
+    bin_edges = np.asarray(BINS_MS)
+    bin_lefts = bin_edges[:-1]
+    bin_widths = np.diff(bin_edges)
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    for p_ms in LED_PERIODS_MS:
+        fig, (ax_top, ax_bot) = plt.subplots(
+            2, 1, figsize=(7.5, 7.8), sharex=False, constrained_layout=True
+        )
+        # -----------------------------
+        # Top: Experimental vs Simulation histograms (bars)
+        # -----------------------------
+        # Experimental histogram (density)
+        exp_ms = exp_samples_by_led[p_ms]
+        # Clip to plotting window for fairness
+        exp_ms_win = exp_ms[(exp_ms >= bin_edges[0]) & (exp_ms <= bin_edges[-1])]
+        exp_hist, _ = np.histogram(exp_ms_win, bins=bin_edges, density=True)
+        # Simulation histogram (already on same bins as density)
+        bp = best_params[p_ms]
+        sim_hist = bp.get("hist", None)
+        # Plot experimental (blue) as bars
+        ax_top.bar(
+            bin_lefts, exp_hist, width=bin_widths,
+            align="edge", alpha=0.5, color="C0", edgecolor="none",
+            label="Experimental"
+        )
+        # Plot simulation (gray) as bars
+        if sim_hist is not None and len(sim_hist) == len(exp_hist):
+            ax_top.bar(
+                bin_lefts, sim_hist, width=bin_widths,
+                align="edge", alpha=0.5, color="0.4", edgecolor="none",
+                label="Simulation (best)"
+            )
+        else:
+            ax_top.text(
+                0.5, 0.5, "No simulation histogram", ha="center", va="center",
+                transform=ax_top.transAxes
+            )
+        ax_top.set_xlabel("ISI (ms)")
+        ax_top.set_ylabel("Density")
+        ax_top.set_title(
+            f"LED {p_ms} ms — Best fit\n"
+            f"k1={bp.get('k1', np.nan):.2f}, k2={bp.get('k2', np.nan):.2f}, "
+            f"β={bp.get('beta_scale', np.nan):.2f}, Stat={bp.get('dist', np.nan):.3f}"
+        )
+        ax_top.legend(frameon=False)
+        ax_top.grid(alpha=0.15, linestyle=":", linewidth=0.8)
+        # -----------------------------
+        # Bottom: Heatmap over (k1, k2) at the β that gives the overall best triple
+        # -----------------------------
+        cube = heatmaps[p_ms]  # shape [len(K1), len(K2), len(BETA)]
+        if cube.ndim != 3 or not np.isfinite(cube).any():
+            ax_bot.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax_bot.transAxes)
+            if savefigs and save_path:
+                fname = f"{save_path}/led_{int(p_ms)}__hist_and_landscape.png"
+                plt.savefig(fname, dpi=200)
+                plt.close(fig)
+            else:
+                plt.show()
+            continue
+
+        # Find the single global best (k1*, k2*, β*)
+        gi, gj, gk = np.unravel_index(np.nanargmin(cube), cube.shape)
+
+        k1_star = float(K1_VALUES[gi])
+        k2_star = float(K2_VALUES[gj])
+        beta_star = float(BETA_SCALES[gk])
+
+        # Take the β* slice for the whole heatmap
+        slice_at_best_beta = cube[:, :, gk]  # distances at fixed β*
+
+        im = ax_bot.imshow(
+            slice_at_best_beta,
+            origin="lower",
+            aspect="auto",
+            extent=[K2_VALUES[0], K2_VALUES[-1], K1_VALUES[0], K1_VALUES[-1]],
+            cmap="viridis"
+        )
+        im.set_rasterized(True)
+        cbar = fig.colorbar(im, ax=ax_bot, shrink=0.92, pad=0.01)
+        cbar.set_label(f"Distance at β* = {beta_star:.2f}")
+
+        # Mark the overall best point (k2*, k1*)
+        ax_bot.plot(k2_star, k1_star, marker="*", ms=14, mfc="white", mec="black", mew=1.1)
+
+        ax_bot.set_xlabel("k2")
+        ax_bot.set_ylabel("k1")
+        ax_bot.set_title(
+            f"Fit landscape at β* (overall best): k1*={k1_star:.2f}, k2*={k2_star:.2f}, β*={beta_star:.2f}"
+        )
+        ax_bot.set_xticks(K2_VALUES)
+        ax_bot.set_yticks(K1_VALUES)
+        ax_bot.grid(alpha=0.12, linestyle=":", linewidth=0.8)
+        # Save or show
+        if savefigs and save_path:
+            fname = f"{save_path}/led_{int(p_ms)}__hist_and_landscape.png"
+            plt.savefig(fname, dpi=200)
+            plt.close(fig)
+        else:
+            plt.show()
+
+
+##### ALL R AND Z STUFF BELOW
+
+
+# ----------------- Phase helpers -----------------
+def wrap01(x):
+    x = np.asarray(x, float)
+    return x - np.floor(x)
+
+
+def wrap_half(x):
+    x = np.asarray(x, float)
+    return ((x + 0.5) % 1.0) - 0.5
+
+
+def ratio_to_Z_samples(phi_eval_bins, R_mean, w, clip_instant=True):
+    """Invert R = (1 - (phi_pre + Z)) / (1 - phi_pre) at bin centers."""
+    phi_pre = wrap01(phi_eval_bins + w)
+    Z = (1.0 - phi_pre) * (1.0 - np.asarray(R_mean, float))
+    if clip_instant:
+        Z = np.maximum(Z, -phi_pre + (-1e-9))
+    return Z, phi_pre
+
+
+def hat_factory(name, **kw):
+    if name == "cos":
+        def hat(u):
+            u = np.asarray(u, float)
+            out = np.zeros_like(u)
+            m = (np.abs(u) <= 1.0)
+            out[m] = 0.5 * (1.0 + np.cos(np.pi * u[m]))
+            return out
+
+        return hat
+
+    elif name == "tri":
+        def hat(u):
+            u = np.asarray(u, float)
+            return np.clip(1.0 - np.abs(u), 0.0, 1.0)
+
+        return hat
+
+    elif name == "poly":
+        p = float(kw.get("p", 2.0))
+        assert p >= 1.0
+
+        def hat(u):
+            u = np.asarray(u, float)
+            out = np.zeros_like(u)
+            m = (np.abs(u) <= 1.0)
+            out[m] = (1.0 - (u[m] ** 2)) ** p
+            return out
+
+        return hat
+
+    elif name == "bump":
+        def hat(u):
+            u = np.asarray(u, float)
+            out = np.zeros_like(u)
+            m = (np.abs(u) < 1.0)
+            z = 1.0 - (u[m] ** 2)
+            out[m] = np.exp(-1.0 / z)
+            out[m] /= out[m].max() if out[m].size else 1.0
+            return out
+
+        return hat
+
+
+# ----------------- Z with pluggable hat -----------------
+def Z_param_hat(phi, beta, rho, k1, k2, hat_fn):
+    # Here phi should be the *unwrapped* phase in cycles (not wrap_half!)
+    d = np.asarray(phi, float)
+    right = hat_fn(d / k1) * (d > 0.0)
+    left = hat_fn(d / abs(k2)) * (d < 0.0)
+    return beta * (right - rho * left)
+
+
+# ----------------- Fitting -----------------
+@dataclass
+class FitResultZHat:
+    hat_name: str
+    hat_params: dict
+    beta: float;
+    rho: float;
+    k1: float;
+    k2: float;
+    w: float
+    success: bool;
+    cost: float
+    bic: float
+
+
+def fit_lobes_on_Z_with_hat(phi_eval_bins, R_mean, counts,
+                            hat_name="cos", hat_params=None,
+                            beta_init=0.06, rho_init=1.2, k1_init=0.10, k2_init=-0.12, w_init=0.0,
+                            ridge_lambda=0.0):
+    hat_params = hat_params or {}
+    hat_fn = hat_factory(hat_name, **hat_params)
+
+    phi_eval_bins = np.asarray(phi_eval_bins, float)
+    weights = np.ones_like(phi_eval_bins) if counts is None else np.asarray(counts, float)
+
+    # Bounds (adjust as needed)
+    lb = np.array([0.0, 0.5, 0.05, -0.50, -0.25])  # beta, rho, k1, k2, w
+    ub = np.array([1.0, 4.0, 0.300, -0.05, 0.25])
+    x0 = np.array([beta_init, rho_init, k1_init, k2_init, w_init], float)
+
+    def resid(x):
+        beta, rho, k1, k2, w = x
+        Z_obs, _ = ratio_to_Z_samples(phi_eval_bins, R_mean, w, clip_instant=True)
+        Z_hat = Z_param_hat(wrap_half(phi_eval_bins), beta, rho, k1, k2, hat_fn)
+        r = Z_hat - Z_obs
+        if ridge_lambda > 0:
+            reg = np.sqrt(ridge_lambda) * (x[:4] / np.array([0.1, 1.0, 0.1, 0.1]))
+            return np.concatenate([np.sqrt(weights) * r, reg])
+        return np.sqrt(weights) * r
+
+    res = least_squares(resid, x0, bounds=(lb, ub), method="trf",
+                        loss="soft_l1", f_scale=0.15,
+                        xtol=1e-10, ftol=1e-10, gtol=1e-10, max_nfev=5000)
+
+    # Weighted RSS for BIC (use residuals w/o regularization part)
+    r = resid(res.x)
+    if r.ndim > 1:
+        r = r[:phi_eval_bins.size]
+    rss = float(np.sum(r ** 2))
+    n = phi_eval_bins.size
+    p = 5  # parameters: beta, rho, k1, k2, w
+    bic = n * np.log(rss / max(n, 1)) + p * np.log(max(n, 1))
+
+    beta, rho, k1, k2, w = res.x
+    return FitResultZHat(hat_name, hat_params, beta, rho, k1, k2, w, res.success, res.cost, bic)
+
+
+# ---- Wrapped step–tanh PRC  (type-0 style) ----
+def Z_tanh_step(phi, A, y0, kappa, phi_c):
+    """
+    phi: evaluation phase in cycles (use wrap_half(phi) upstream)
+    Returns Δφ(φ) = wrap_{1/2}( y0 + A * tanh(kappa*(φ - φ_c)) )
+    where wrap_half(x) ∈ (-1/2, 1/2].
+    A  : half jump height (total step = 2A)
+    y0 : vertical midpoint of the unwrapped curve
+    kappa > 0 : steepness
+    phi_c : center of the step (in cycles)
+    """
+    return wrap_half(y0 + A * np.tanh(kappa * (phi - phi_c)))
+
+
+from dataclasses import dataclass
+
+@dataclass
+class FitResultTanhStep:
+    model: str   # "tanhstep"
+    A: float; y0: float; kappa: float; phi_c: float
+    success: bool; cost: float; bic: float
+
+def fit_tanh_step(phi_eval_bins, R_mean, counts,
+                  A_init=0.10, y0_init=0.00, kappa_init=12.0, phi_c_init=0.0,
+                  ridge_lambda=0.0):
+    """class FitResultTanhStep:
+    model: str   # "tanhstep"
+    A: float; y0: float; kappa: float; phi_c: float
+    success: bool; cost: float; bic: float
+    Least-squares fit in Z-space using the wrapped step–tanh PRC.
+    Bounds are conservative; adjust if your species shows larger shifts.
+    """
+    phi_eval_bins = np.asarray(phi_eval_bins, float)
+    weights = np.ones_like(phi_eval_bins) if counts is None else np.asarray(counts, float)
+
+    # Parameter vector: x = [A, y0, kappa, phi_c, w]
+    # Reasonable bounds for firefly PRCs
+    lb = np.array([ 0.00, -0.20,   2.0, -0.15])  # A ∈ [0,0.3], y0 bias, kappa≥2, center/window
+    ub = np.array([ 0.30,  0.20,  80.0,  0.15])
+    x0 = np.array([A_init, y0_init, kappa_init, phi_c_init], float)
+
+    def resid(x):
+        A, y0, kappa, phi_c, w = x
+        # observed Z from data given w (exactly like your other fits)
+        Z_obs, _ = ratio_to_Z_samples(phi_eval_bins, R_mean, w=0.0, clip_instant=True)
+        # model Z on wrapped phase
+        Z_hat = Z_tanh_step(wrap_half(phi_eval_bins), A, y0, kappa, phi_c)
+        r = Z_hat - Z_obs
+        if ridge_lambda > 0:
+            # tiny ridge on (A,y0,kappa,phi_c) to discourage extremes (scale roughly)
+            scale = np.array([0.1, 0.1, 20.0, 0.05])
+            reg = np.sqrt(ridge_lambda) * (x[:4] / scale)
+            return np.concatenate([np.sqrt(weights)*r, reg])
+        return np.sqrt(weights) * r
+
+    res = least_squares(resid, x0, bounds=(lb, ub), method="trf",
+                        loss="soft_l1", f_scale=0.15,
+                        xtol=1e-10, ftol=1e-10, gtol=1e-10, max_nfev=5000)
+
+    # BIC using the residuals part only (exclude reg tail if present)
+    r = resid(res.x)
+    if r.ndim > 1:
+        r = r[:phi_eval_bins.size]
+    rss = float(np.sum(r**2))
+    n = phi_eval_bins.size
+    p = 5  # A, y0, kappa, phi_c, w
+    bic = n*np.log(rss / max(n,1)) + p*np.log(max(n,1))
+
+    A, y0, kappa, phi_c, w = res.x
+    return FitResultTanhStep("tanhstep", A, y0, kappa, phi_c, res.success, res.cost, bic)
+
+
+def Z_model_dispatch(model_name, params_dict_or_fit, phi_wrapped):
+    """
+    Returns Z(φ) for any model at wrapped phases phi_wrapped ∈ (-1/2, 1/2].
+    - For "cos" / "tri" (hat-based), expects FitResultZHat (beta,rho,k1,k2) and hat_params.
+    - For "tanhstep", expects FitResultTanhStep (A,y0,kappa,phi_c).
+    """
+    if model_name in ("cos", "tri"):
+        fit = params_dict_or_fit
+        hat_fn = hat_factory(fit.hat_name, **fit.hat_params)
+        return Z_param_hat(phi_wrapped, fit.beta, fit.rho, fit.k1, fit.k2, hat_fn)
+    elif model_name == "tanhstep":
+        fit = params_dict_or_fit
+        return Z_tanh_step(phi_wrapped, fit.A, fit.y0, fit.kappa, fit.phi_c)
+    else:
+        raise ValueError(f"Unknown model {model_name}")
+
+
+def forward_R_binavg_any(fit, centers, r_max=2.0):
+    """
+    Bin-averaged forward model R(φ) for any fit type.
+    - centers: φ grid in cycles
+    """
+    model_name = getattr(fit, "hat_name", getattr(fit, "model", None))
+    if model_name is None:
+        raise ValueError("Unrecognized fit object.")
+    centers = np.asarray(centers, float)
+    bw = np.median(np.diff(np.sort(centers)))
+    half = 0.5*bw
+    offs = np.linspace(-half, half, 21)
+    out = np.empty_like(centers)
+    for i, c in enumerate(centers):
+        samp = c + offs
+        phi_pre = wrap01(samp + fit.w)
+        Z_vals  = Z_model_dispatch(model_name, fit, wrap_half(samp))
+        num = 1.0 - (phi_pre + Z_vals)
+        den = 1.0 - phi_pre
+        eps = 1e-12
+        R_s = np.maximum(num, 0.0) / np.maximum(den, eps)
+        R_s = np.minimum(R_s, r_max)
+        out[i] = R_s.mean()
+    return out
+
+
+def tanhjump_hat_factory(s=12.0, delta0=0.01):
+    """
+    Tanh 'jump' hat on normalized distance a=|u|, u=d/k.
+    - dead zone |u|<=delta0 -> 0
+    - peak = 1 just outside the dead zone (t=0)
+    - tapers to 0 at |u|=1 (t=1)
+    """
+
+    def hat(u):
+        u = np.asarray(u, float)
+        a = np.abs(u)
+        out = np.zeros_like(a)
+
+        m = (a > delta0) & (a <= 1.0)
+        if np.any(m):
+            # map a in (delta0,1] -> t in (0,1]
+            denom_range = max(1e-12, 1.0 - delta0)
+            t = (a[m] - delta0) / denom_range
+            # normalized tanh: h(0)=1, h(1)~0
+            denom_tanh = np.tanh(s) if s > 1e-12 else 1.0
+            base = 1.0 - (np.tanh(s * t) / denom_tanh)
+            out[m] = np.clip(base, 0.0, 1.0)
+        return out
+
+    return hat
+
+
+# Forward for R using bin-average (as in your plotting routine)
+def forward_R_binavg(fit: FitResultZHat, centers, r_max=2.0):
+    hat_fn = hat_factory(fit.hat_name, **fit.hat_params)
+
+    def Z_func(phi_eval_wrapped):
+        return Z_param_hat(phi_eval_wrapped, fit.beta, fit.rho, fit.k1, fit.k2, hat_fn)
+
+    centers = np.asarray(centers, float)
+    bw = np.median(np.diff(np.sort(centers)))
+    half = 0.5 * bw
+    offs = np.linspace(-half, half, 21)
+    out = np.empty_like(centers)
+    for i, c in enumerate(centers):
+        samp = c + offs
+        phi_pre = wrap01(samp + fit.w)
+        Z_vals = Z_func(samp)
+        num = 1.0 - (phi_pre + Z_vals)
+        den = 1.0 - phi_pre
+        eps = 1e-12
+        R_s = np.maximum(num, 0.0) / np.maximum(den, eps)
+        R_s = np.minimum(R_s, r_max)
+        out[i] = R_s.mean()
+    return out
+
+
+# ----------------- Data loading (synthetic fallback) -----------------
+def load_led_data_from_csv(save_dir,
+                           led_periods_ms=None,
+                           r_min=0.0, r_max=2.0,
+                           phase_col="phase",
+                           ratio_col="ratio",
+                           count_col="n",
+                           led_col_candidates=("led_ms", "led", "LED", "led_period_ms")):
+    """
+    Returns:
+      led_periods_ms : list[int]
+      data_per_led   : dict[int] -> (phi_bins, R_mean, counts)
+
+    CSV expected columns:
+      - phase bins      (default: 'phase')
+      - ratio values    (default: 'ratio')
+      - optional counts (default: 'n')
+      - optional LED id (one of led_col_candidates); if present, groups by LED.
+
+    Behavior:
+      - If an LED column exists, group by it and sort each group by phase.
+      - If no LED column exists, replicate same (phi, R, n) for each LED in `led_periods_ms`.
+        If `led_periods_ms` is None, makes a single-key dict using 0 (or raise).
+    """
+    csv_path = Path(save_dir) / "prc_ratio_all.csv"
+    df = pd.read_csv(csv_path)
+
+    # Find LED column if present
+    led_col = None
+    for c in led_col_candidates:
+        if c in df.columns:
+            led_col = c
+            break
+
+    def _clean_triplet(frame):
+        # Extract and clean
+        phi_bins = frame[phase_col].to_numpy(float)
+        R_mean = frame[ratio_col].to_numpy(float)
+        if count_col in frame.columns:
+            counts = frame[count_col].to_numpy(float)
+        else:
+            counts = np.ones_like(R_mean, dtype=float)
+
+        # Replace non-finite ratios with 1.0 and clip range
+        R_mean = np.where(np.isfinite(R_mean), R_mean, 1.0)
+        R_mean = np.clip(R_mean, r_min, r_max)
+
+        # Sort by phase (important for downstream plotting)
+        order = np.argsort(phi_bins)
+        phi_bins = phi_bins[order]
+        R_mean = R_mean[order]
+        counts = counts[order]
+
+        # Ensure 1D contiguous arrays
+        return np.ascontiguousarray(phi_bins, float), \
+            np.ascontiguousarray(R_mean, float), \
+            np.ascontiguousarray(counts, float)
+
+    data_per_led = {}
+    out_leds = []
+
+    if led_col is not None:
+        # Group by LED period from the CSV
+        for led_val, g in df.groupby(led_col):
+            try:
+                ms = int(round(float(led_val)))
+            except Exception:
+                # If LED values aren't numeric, skip group
+                continue
+            phi_bins, R_mean, counts = _clean_triplet(g)
+            data_per_led[ms] = (phi_bins, R_mean, counts)
+            out_leds.append(ms)
+
+        # Sort LED list for consistency
+        led_periods_ms = sorted(out_leds)
+
+    else:
+        # No LED column: use provided list, or fall back to a single dummy key
+        phi_bins, R_mean, counts = _clean_triplet(df)
+
+        if led_periods_ms is None:
+            # If you truly only have one dataset and no LED list, keep a single entry
+            led_periods_ms = [0]  # or raise ValueError("Please pass led_periods_ms")
+        for ms in led_periods_ms:
+            data_per_led[int(ms)] = (phi_bins.copy(), R_mean.copy(), counts.copy())
+
+    return led_periods_ms, data_per_led
+
+
+# ----------------- Fitting across LEDs & pooled mean -----------------
+def fit_models_across_leds(led_periods_ms, data_per_led, models):
+    fits = {m: {} for m in models}
+    # Per-LED
+    for m in models:
+        fits[m]['per_led'] = {}
+        for ms in led_periods_ms:
+            phi, Rm, cnt = data_per_led[ms]
+            if m in ("tri", "cos"):
+                fit = fit_lobes_on_Z_with_hat(phi, Rm, cnt, hat_name=m,
+                                              hat_params={}, ridge_lambda=1e-6)
+            elif m == "tanhstep":
+                fit = fit_tanh_step(phi, Rm, cnt, ridge_lambda=1e-6)
+            else:
+                raise ValueError(f"Unknown model {m}")
+            fits[m]['per_led'][ms] = fit
+    # Pooled (stack bins; same approach as you had)
+    for m in models:
+        phis, Rs, Cs = [], [], []
+        for ms in led_periods_ms:
+            phi, Rm, cnt = data_per_led[ms]
+            phis.append(phi); Rs.append(Rm); Cs.append(cnt)
+        phi_all = np.concatenate(phis)
+        R_all   = np.concatenate(Rs)
+        C_all   = np.concatenate(Cs)
+        if m in ("tri", "cos"):
+            fits[m]['pooled'] = fit_lobes_on_Z_with_hat(phi_all, R_all, C_all,
+                                                        hat_name=m, hat_params={}, ridge_lambda=1e-6)
+        elif m == "tanhstep":
+            fits[m]['pooled'] = fit_tanh_step(phi_all, R_all, C_all, ridge_lambda=1e-6)
+    return fits
+
+
+# ----------------- Visualization -----------------
+def plot_R_and_Z_for_led(ms, data_per_led, fits_for_models, outdir):
+    """
+    Creates two figures for LED `ms`:
+      1) R(phi): data vs model curves for each model
+      2) Z(phi): model Z-curves for each model
+    """
+    Path(outdir).mkdir(parents=True, exist_ok=True)
+    phi, Rm, cnt = data_per_led[ms]
+    grid = np.linspace(phi.min(), phi.max(), 600)
+
+    # Figure 1: R(phi)
+    plt.figure(figsize=(8, 5))
+    plt.plot(phi, Rm, '.', alpha=0.7, label='Data')
+    for model, fit in fits_for_models.items():
+        y = forward_R_binavg_any(fit, grid)
+        plt.plot(grid, y, lw=2, label=model)
+    plt.axhline(1.0, ls='--')
+    plt.xlabel(r'Phase $\phi$ (cycles)')
+    plt.ylabel(r'$R(\phi)$')
+    plt.title(f'R(phi) — LED {ms} ms')
+    plt.legend()
+    f1 = f'{outdir}/Rphi_LED{ms}.png'
+    plt.tight_layout();
+    plt.savefig(f1, dpi=300);
+    plt.close()
+
+    # Figure 2: Z(phi)
+    plt.figure(figsize=(8, 5))
+    for model, fit in fits_for_models.items():
+        hat_fn = hat_factory(fit.hat_name, **fit.hat_params)
+        Zg = Z_model_dispatch(getattr(fit, "hat_name", getattr(fit, "model", None)),
+                              fit,
+                              wrap_half(grid))
+        plt.plot(grid, Zg, lw=2, label=model)
+    plt.axhline(0.0, ls='--')
+    plt.xlabel(r'Phase $\phi$ (cycles)')
+    plt.ylabel(r'$Z(\phi)$')
+    plt.title(f'Z(phi) — LED {ms} ms')
+    plt.legend()
+    f2 = f'{outdir}/Zphi_LED{ms}.png'
+    plt.tight_layout();
+    plt.savefig(f2, dpi=300);
+    plt.close()
+
+    return f1, f2
+
+
+def plot_R_and_Z_pooled_mean(led_periods_ms, data_per_led, fits, outdir,
+                             n_ref=600,  # points on the common reference grid
+                             min_overlap_frac=0.8):  # require each LED to cover >=80% of common span
+    """
+    Build a common reference grid from the intersection of LED phase ranges,
+    interpolate each LED's R(phi) onto it, average, and plot.
+    No np.allclose calls; robust to differing bin counts/locations.
+    """
+    from pathlib import Path
+    Path(outdir).mkdir(parents=True, exist_ok=True)
+
+    # 1) Collect per-LED phase ranges (after sorting & dedup)
+    spans = []
+    cleaned = {}
+    for ms in led_periods_ms:
+        phi, Rm, cnt = data_per_led[ms]
+        phi = np.asarray(phi, float)
+        Rm = np.asarray(Rm, float)
+
+        # Drop NaNs/Infs
+        good = np.isfinite(phi) & np.isfinite(Rm)
+        phi, Rm = phi[good], Rm[good]
+
+        # Sort and deduplicate phases (keep the first occurrence)
+        order = np.argsort(phi)
+        phi, Rm = phi[order], Rm[order]
+        phi_u, idx = np.unique(phi, return_index=True)
+        Rm = Rm[idx]
+        phi = phi_u
+
+        # Store cleaned series
+        cleaned[ms] = (phi, Rm)
+        if phi.size >= 2:
+            spans.append((phi.min(), phi.max()))
+
+    if not spans:
+        raise ValueError("No usable LED series found for pooling.")
+
+    # 2) Build common reference grid on the INTERSECTION of ranges
+    common_min = max(s[0] for s in spans)
+    common_max = min(s[1] for s in spans)
+    if not np.isfinite(common_min) or not np.isfinite(common_max) or common_max <= common_min:
+        raise ValueError("LED phase ranges do not overlap sufficiently to build a common grid.")
+
+    ref_phi = np.linspace(common_min, common_max, n_ref)
+
+    # 3) Interpolate each LED onto ref grid if it covers enough of the span
+    R_stack = []
+    used_leds = []
+    span_len = common_max - common_min
+    for ms in led_periods_ms:
+        phi, Rm = cleaned[ms]
+        # compute overlap with common span
+        led_min, led_max = (phi.min(), phi.max()) if phi.size else (np.inf, -np.inf)
+        overlap = max(0.0, min(led_max, common_max) - max(led_min, common_min))
+        if phi.size >= 2 and overlap >= min_overlap_frac * span_len:
+            # interpolate (clip endpoints to avoid extrapolation warnings)
+            R_interp = np.interp(ref_phi, phi, Rm)
+            R_stack.append(R_interp)
+            used_leds.append(ms)
+        # else: skip this LED for the pooled average
+
+    if len(R_stack) == 0:
+        raise ValueError("No LED series met the overlap requirement for pooling.")
+
+    R_mean = np.mean(np.vstack(R_stack), axis=0)
+
+    # 4) Plot pooled R(phi) vs. model curves (pooled fits)
+    plt.figure(figsize=(8, 5))
+    plt.plot(ref_phi, R_mean, '.', alpha=0.8, label=f'Data mean (n={len(R_stack)} LEDs)')
+    grid = np.linspace(ref_phi.min(), ref_phi.max(), 600)
+    for model, rec in fits.items():
+        y = forward_R_binavg_any(rec['pooled'], grid)
+        plt.plot(grid, y, lw=2, label=model)
+    plt.axhline(1.0, ls='--')
+    plt.xlabel(r'Phase $\phi$ (cycles)');
+    plt.ylabel(r'$R(\phi)$')
+    plt.title('R(φ): mean across LEDs (pooled)')
+    plt.legend()
+    fR = f'{outdir}/Rphi_mean_across_LEDs.png'
+    plt.tight_layout();
+    plt.savefig(fR, dpi=300);
+    plt.close()
+
+    # 5) Plot Z(phi) from pooled fits over the same domain
+    plt.figure(figsize=(8, 5))
+    for model, rec in fits.items():
+        fit = rec['pooled']
+        hat_fn = hat_factory(fit.hat_name, **fit.hat_params)
+        Zg = Z_model_dispatch(getattr(fit, "hat_name", getattr(fit, "model", None)),
+                              fit,
+                              wrap_half(grid))
+
+        plt.plot(grid, Zg, lw=2, label=model)
+    plt.axhline(0.0, ls='--')
+    plt.xlabel(r'Phase $\phi$ (cycles)');
+    plt.ylabel(r'$Z(\phi)$')
+    plt.title('Z(φ): pooled fits (on common domain)')
+    plt.legend()
+    fZ = f'{outdir}/Zphi_pooled.png'
+    plt.tight_layout();
+    plt.savefig(fZ, dpi=300);
+    plt.close()
+
+    # Optional: quick debug printout
+    print(f"[pool] used LEDs: {used_leds} | common span = [{common_min:.4f}, {common_max:.4f}] | ref n={n_ref}")
+
+    return fR, fZ
+
+
+def r_and_z(datafile='figs'):
+    led_periods_ms, data_per_led = load_led_data_from_csv(datafile)
+
+    models = ["tri", "cos", "tanhjump"]
+
+    fits = fit_models_across_leds(led_periods_ms, data_per_led, models=models)
+
+    out_root = Path("sim_data/impulse_comparison")
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    generated = []
+    for ms in led_periods_ms:
+        files = plot_R_and_Z_for_led(
+            ms,
+            data_per_led,
+            {m: fits[m]['per_led'][ms] for m in models},
+            outdir=str(out_root / f"LED_{ms}")
+        )
+        generated.extend(files)
+
+    mean_files = plot_R_and_Z_pooled_mean(
+        led_periods_ms, data_per_led, fits, outdir=str(out_root / "pooled")
+    )
+    generated.extend(mean_files)
+
+
+def plot_R_and_Z_for_led_single(ms, data_per_led, fit, outdir):
+    """Single-model R and Z plots for one LED."""
+    Path(outdir).mkdir(parents=True, exist_ok=True)
+    phi, Rm, _ = data_per_led[ms]
+    grid = np.linspace(phi.min(), phi.max(), 600)
+
+    # R(phi)
+    plt.figure(figsize=(8, 5))
+    plt.scatter(phi, Rm, c='k', s=20, alpha=0.2, label='Data')
+    y = forward_R_binavg_any(fit, grid)
+    plt.plot(grid, y, lw=2, label=f'{fit.hat_name}')
+    plt.axhline(1.0, ls='--', color='gray')
+    plt.xlabel(r'Phase $\phi$'); plt.ylabel(r'$R(\phi)$')
+    plt.title(f'R(φ) — LED {ms} ms — {fit.hat_name}')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(Path(outdir)/f'Rphi_LED{ms}_{fit.hat_name}.png', dpi=300)
+    plt.close()
+
+    # Z(phi)
+    plt.figure(figsize=(8, 5))
+    hat_fn = hat_factory(fit.hat_name, **fit.hat_params)
+    Zg = Z_model_dispatch(getattr(fit, "hat_name", getattr(fit, "model", None)),
+                          fit,
+                          wrap_half(grid))
+    plt.plot(grid, Zg, lw=2, label=f'{fit.hat_name}')
+    plt.axhline(0.0, ls='--', color='gray')
+    plt.xlabel(r'Phase $\phi$'); plt.ylabel(r'$Z(\phi)$')
+    plt.title(f'Z(φ) — LED {ms} ms — {fit.hat_name}')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(Path(outdir)/f'Zphi_LED{ms}_{fit.hat_name}.png', dpi=300)
+    plt.close()
+
+
+def plot_R_and_Z_pooled_single(led_periods_ms, data_per_led, fit, outdir):
+    """Single-model pooled R and Z plots."""
+    Path(outdir).mkdir(parents=True, exist_ok=True)
+
+    # Build pooled mean
+    phis, Rs = [], []
+    for ms in led_periods_ms:
+        phi, Rm, _ = data_per_led[ms]
+        phis.append(phi); Rs.append(Rm)
+    ref_phi = np.linspace(max([p.min() for p in phis]),
+                          min([p.max() for p in phis]),
+                          600)
+    R_interp = [np.interp(ref_phi, p, r) for p, r in zip(phis, Rs)]
+    R_mean = np.mean(R_interp, axis=0)
+
+    # R(phi)
+    plt.figure(figsize=(8,5))
+    plt.scatter(np.concatenate(phis), np.concatenate(Rs),
+                c='k', s=5, alpha=0.1, label='Data')
+    y = forward_R_binavg_any(fit, ref_phi)
+    plt.plot(ref_phi, y, lw=2, label=f'{fit.hat_name}')
+    plt.axhline(1.0, ls='--', color='gray')
+    plt.xlabel(r'Phase $\phi$'); plt.ylabel(r'$R(\phi)$')
+    plt.title(f'Pooled R(φ) — {fit.hat_name}')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(Path(outdir)/f'Rphi_pooled_{fit.hat_name}.png', dpi=300)
+    plt.close()
+
+    # Z(phi)
+    plt.figure(figsize=(8,5))
+    hat_fn = hat_factory(fit.hat_name, **fit.hat_params)
+    Zg = Z_param_hat(wrap_half(ref_phi), fit.beta, fit.rho, fit.k1, fit.k2, hat_fn)
+    plt.plot(ref_phi, Zg, lw=2, label=f'{fit.hat_name}')
+    plt.axhline(0.0, ls='--', color='gray')
+    plt.xlabel(r'Phase $\phi$'); plt.ylabel(r'$Z(\phi)$')
+    plt.title(f'Pooled Z(φ) — {fit.hat_name}')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(Path(outdir)/f'Zphi_pooled_{fit.hat_name}.png', dpi=300)
+    plt.close()
