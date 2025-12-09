@@ -11,7 +11,7 @@ This repository serves as a home for the data and analysis code for the paper:
 
 Natural populations of synchronous fireflies are well-known examples of collective behavior. This project investigates whether and how individual fireflies of species *Photuris frontalis* respond to external periodic driving signals delivered via LEDs. The goal is to test for differential levels of **entrainment** or **phase-locking** as a response to LED perturbation, and to quantify how the frequency of the driving stimulus alters firefly flashing behavior.
 
-Specifically, we analyze open-loop experiments in which fireflies receive a periodic visual stimulus but do not influence LED timing. For each experimental trial, we extract the distributions of the firefly period (T_FF) and phase (\phi) to ultimately produce phase response curves (PRCs).
+Specifically, we analyze open-loop experiments in which fireflies receive a periodic visual stimulus but do not influence LED timing. For each experimental trial, we extract the firefly period and phase to ultimately produce phase response curves (PRCs).
 
 These metrics are compared against simulations using phenomenological PRC models and integrate-and-fire style oscillators to characterize excitation–inhibition dynamics governing flash timing.
 
