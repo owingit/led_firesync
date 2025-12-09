@@ -36,7 +36,7 @@ led_firesync/
 - **temp_data/** — Contains environmental metadata (temperature, etc.) associated with trials.
 - **figs/** — Saved static and interactive figures; `timeseries/` contains HTML representations for exploratory analysis.
 - **helpers/** — Common plotting functions, period histogram utilities, statistical aggregation tools, file I/O helpers. Additionally the folder ```preprocessing``` containing the video analysis code.
-- **led_analysis.py** — Main script for reproducing all analytical steps and generating manuscript-ready figures.
+- **led_analysis.py** — Main driver script, for reproducing all analytical steps and generating figures, with many additional flags and functionalities off of the main code path for exploring alternate aspects of the data.
 
 ---
 
