@@ -29,7 +29,6 @@ led_firesync/
 ├── data_paths/   
 ├── simulation/    
 ├── figs/   
-├── preprocessing/   
 ├── temp_data/  
 ├── helpers/   
 ├── led_analysis.py  
@@ -39,10 +38,9 @@ led_firesync/
 
 - **data_paths/** — All experimental flash-timing data in CSV format. Each file is coded by the date and LED period as well as a unique index, of the form <MMDDYYYY_LEDPERIOD_INDEX>.csv. Within each file is a list of firefly time/state tuples and LED time/state tuples, representing the timeseries for the firefly (off=0, flash=1) and the timeseries for the LED (off=1, flash=2), respectively 
 - **simulation/** — Code to simulate PRCs, entrainment, and frequency responses; includes saved model parameters.
-- **preprocessing/** — Scripts for extracting flash timestamps from videos, cleaning raw event streams, etc.
 - **temp_data/** — Contains environmental metadata (temperature, etc.) associated with trials.
 - **figs/** — Saved static and interactive figures; `timeseries/` contains HTML representations for exploratory analysis.
-- **helpers/** — Common plotting functions, period histogram utilities, statistical aggregation tools, file I/O helpers.
+- **helpers/** — Common plotting functions, period histogram utilities, statistical aggregation tools, file I/O helpers. Additionally the folder ```preprocessing``` containing the video analysis code.
 - **led_analysis.py** — Main script for reproducing all analytical steps and generating manuscript-ready figures.
 
 ---
