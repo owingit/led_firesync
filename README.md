@@ -26,7 +26,7 @@ These metrics are compared against simulations using phenomenological PRC models
 
 led_firesync/
 
-├── data/   
+├── data_paths/   
 ├── simulation/    
 ├── figs/   
 ├── preprocessing/   
@@ -37,7 +37,7 @@ led_firesync/
 
 ### Description of key directories / files
 
-- **data/** — All experimental flash-timing data in CSV format. Each file is coded by the date and LED period as well as a unique index, of the form <MMDDYYYY_LEDPERIOD_INDEX>.csv
+- **data_paths/** — All experimental flash-timing data in CSV format. Each file is coded by the date and LED period as well as a unique index, of the form <MMDDYYYY_LEDPERIOD_INDEX>.csv. Within each file is a list of firefly time/state tuples and LED time/state tuples, representing the timeseries for the firefly (off=0, flash=1) and the timeseries for the LED (off=1, flash=2), respectively 
 - **simulation/** — Code to simulate PRCs, entrainment, and frequency responses; includes saved model parameters.
 - **preprocessing/** — Scripts for extracting flash timestamps from videos, cleaning raw event streams, etc.
 - **temp_data/** — Contains environmental metadata (temperature, etc.) associated with trials.
