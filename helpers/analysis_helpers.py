@@ -8,7 +8,7 @@ from scipy import signal, optimize, stats
 from statsmodels.regression.linear_model import OLS
 from statsmodels.tools import add_constant
 
-import plotting_helpers
+from helpers import plotting_helpers
 from temp_data import temp_dict
 
 MIN_CUTOFF_PERIOD = 0.25
@@ -944,6 +944,7 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
     - num_flashes: how many flashes need to be in the top
     - plot_prc: whether to plot the phase response curve for the bouts
     """
+
     bouts = []
     for key, bouts_list in metrics_dict[bout_gap_length].items():
         for bout in bouts_list:
@@ -965,19 +966,20 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
         phases = t[1]['phases']
         phase_derivs = circular_diff(phases, float(t[0])/1000)
         top_derivs.extend(phase_derivs)
-    fig, ax = plt.subplots(figsize=(10,6))
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
+    if plot_prc:
+        fig, ax = plt.subplots(figsize=(10,6))
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
 
-    ax.hist(bottom_derivs, density=True, bins=np.arange(-1.0, 1.0, 0.13), color='gray', alpha=0.8,
-            label='Phase derivatives from drifting bouts')
-    ax.hist(top_derivs, density=True, bins=np.arange(-1.0, 1.0, 0.13), color='green', alpha=0.8,
-            label='Phase derivatives from stable bouts')
-    ax.set_xlabel(r'$\frac{d\phi}{dt}$ (s$^{-1}$)', fontsize=12)
-    ax.set_ylabel('pdf')
-    plt.legend()
-    plt.savefig('figs/best_worst_bout_phase_derivatives_{}.png'.format(bout_gap_length))
-    plt.close()
+        ax.hist(bottom_derivs, density=True, bins=np.arange(-1.0, 1.0, 0.13), color='gray', alpha=0.8,
+                label='Phase derivatives from drifting bouts')
+        ax.hist(top_derivs, density=True, bins=np.arange(-1.0, 1.0, 0.13), color='green', alpha=0.8,
+                label='Phase derivatives from stable bouts')
+        ax.set_xlabel(r'$\frac{d\phi}{dt}$ (s$^{-1}$)', fontsize=12)
+        ax.set_ylabel('pdf')
+        plt.legend()
+        plt.savefig('figs/best_worst_bout_phase_derivatives_{}.png'.format(bout_gap_length))
+        plt.close()
     print('Top and bottom bouts used for phase derivatives: ')
     print('Top: ')
     for b in top_bouts:
@@ -1056,23 +1058,24 @@ def extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs, top_n=10, num
                 writer.writerows(rows)
 
             print(f"Saved {outpath}")
-            plt.figure(figsize=(6, 2))
+            if plot_prc:
+                plt.figure(figsize=(6, 2))
 
-            plt.scatter(ff_xs_flashes, [0.5] * len(ff_xs_flashes), color='green', s=10, marker='o', label='FF flashes')
-            plt.scatter(led_xs_flashes, [0.51] * len(led_xs_flashes), color='purple', s=10, marker='x',
-                        label='LED flashes')
+                plt.scatter(ff_xs_flashes, [0.5] * len(ff_xs_flashes), color='green', s=10, marker='o', label='FF flashes')
+                plt.scatter(led_xs_flashes, [0.51] * len(led_xs_flashes), color='purple', s=10, marker='x',
+                            label='LED flashes')
 
-            plt.ylim(0.49, 0.52)
-            plt.title(f'{boutname}\nScore: {score:.2f}')
-            plt.xlabel('Time')
-            plt.ylabel('Signal')
-            plt.legend(loc='upper right', fontsize='x-small', frameon=False)
-            plt.tight_layout()
+                plt.ylim(0.49, 0.52)
+                plt.title(f'{boutname}\nScore: {score:.2f}')
+                plt.xlabel('Time')
+                plt.ylabel('Signal')
+                plt.legend(loc='upper right', fontsize='x-small', frameon=False)
+                plt.tight_layout()
 
-            plotname = f'bout_{i:02d}_score_{score:.2f}_{key}[{min_x}-{max_x}].png'
-            plotpath = os.path.join(f'bouts_{bout_gap_length}', plotname)
-            plt.savefig(plotpath, dpi=150)
-            plt.close()
+                plotname = f'bout_{i:02d}_score_{score:.2f}_{key}[{min_x}-{max_x}].png'
+                plotpath = os.path.join(f'bouts_{bout_gap_length}', plotname)
+                plt.savefig(plotpath, dpi=150)
+                plt.close()
 
             if plot_prc:
                 _, _, pairs, period = compute_phase_response_curve(
@@ -1182,50 +1185,49 @@ def do_nonlinear_analysis(pargs):
                                                                only_lookback=pargs.re_norm)
 
             times, phases, responses, shifts = zip(*[(t, p, r, s) for p, r, s, t in pairs])
-            figtitle = 'figs/analysis/DFA_Analysis_and_Cross-Correlation_of_phases_{}_{}_{}.png'.format(date, key, index)
+            if pargs.plot_all_nla:
+                figtitle = 'figs/analysis/DFA_Analysis_and_Cross-Correlation_of_phases_{}_{}_{}.png'.format(date, key, index)
 
-            if pargs.re_norm:
-                figtitle = 'figs/analysis/DFA_Analysis_and_Cross-Correlation_of_phases_0-1_{}_{}_{}.png'.format(date,
-                                                                                                                key,
-                                                                                                                index)
-            scales, fluctuations, alpha, ci = dfa(phases)
-            lags, correlation = compute_cross_correlation(led_xs_flashes, ff_xs_flashes)
-            if pargs.log:
-                if alpha is not None:
-                    phase_hurst, _ = whittle_mle(phases)
-                    peak_index = np.argmax(correlation)
-                    peak_lag = lags[peak_index]
-                    peak_correlation = correlation[peak_index]
-                    print(f"DFA, Cross-correlation complete for {date} {key} {index}")
-                    print(f"Alpha: {alpha:.4f}")
-                    print(f"Hurst exp: {phase_hurst:.4f} ")
-                    print(f"Peak Correlation: {peak_correlation:.4f}")
-                    print(f"Peak Lag: {peak_lag:.4f} ms")
+                if pargs.re_norm:
+                    figtitle = 'figs/analysis/DFA_Analysis_and_Cross-Correlation_of_phases_0-1_{}_{}_{}.png'.format(date,
+                                                                                                                    key,
+                                                                                                                    index)
+                scales, fluctuations, alpha, ci = dfa(phases)
+                lags, correlation = compute_cross_correlation(led_xs_flashes, ff_xs_flashes)
+                if pargs.log:
+                    if alpha is not None:
+                        phase_hurst, _ = whittle_mle(phases)
+                        peak_index = np.argmax(correlation)
+                        peak_lag = lags[peak_index]
+                        peak_correlation = correlation[peak_index]
+                        print(f"DFA, Cross-correlation complete for {date} {key} {index}")
+                        print(f"Alpha: {alpha:.4f}")
+                        print(f"Hurst exp: {phase_hurst:.4f} ")
+                        print(f"Peak Correlation: {peak_correlation:.4f}")
+                        print(f"Peak Lag: {peak_lag:.4f} ms")
+                pfigtitle = 'figs/analysis/autocorrelation_of_phases_{}_{}_{}.png'.format(date, key, index)
+                if pargs.re_norm:
+                    pfigtitle = 'figs/analysis/autocorrelation_of_phases_0-1_{}_{}_{}.png'.format(date, key, index)
+                plotting_helpers.plot_autocorrelation(phases, pfigtitle)
 
-            pfigtitle = 'figs/analysis/autocorrelation_of_phases_{}_{}_{}.png'.format(date, key, index)
-            if pargs.re_norm:
-                pfigtitle = 'figs/analysis/autocorrelation_of_phases_0-1_{}_{}_{}.png'.format(date, key, index)
-            plotting_helpers.plot_autocorrelation(phases, pfigtitle)
-
-            if pargs.do_poincare:
                 pcare_figtitle = 'figs/analysis/Poincare_of_phases_{}_{}_{}.png'.format(date, key, index)
                 if pargs.re_norm:
                     pcare_figtitle = 'figs/analysis/Poincare_of_phases_0-1_{}_{}_{}.png'.format(date, key, index)
                 plotting_helpers.plot_poincare(phases, pcare_figtitle)
 
-            fig, axes = plt.subplots(2)
-            if alpha is not None:
-                phase_hurst, _ = whittle_mle(phases)
-                plotting_helpers.plot_dfa_results(scales, fluctuations, alpha, ci, phase_hurst, axes[0])
-            else:
-                print(f"DFA, Cross-correlation failed for {date} {key} {index}")
+                fig, axes = plt.subplots(2)
+                if alpha is not None:
+                    phase_hurst, _ = whittle_mle(phases)
+                    plotting_helpers.plot_dfa_results(scales, fluctuations, alpha, ci, phase_hurst, axes[0])
+                else:
+                    print(f"DFA, Cross-correlation failed for {date} {key} {index}")
+                    plt.close(fig)
+                    continue
+                plotting_helpers.plot_cross_correlation(lags, correlation, axes[1])
+                fig.suptitle(f"DFA_Analysis_and_Cross-Correlation_{date}_{key}_{index}")
+                plt.tight_layout()
+                plt.savefig(figtitle)
                 plt.close(fig)
-                continue
-            plotting_helpers.plot_cross_correlation(lags, correlation, axes[1])
-            fig.suptitle(f"DFA_Analysis_and_Cross-Correlation_{date}_{key}_{index}")
-            plt.tight_layout()
-            plt.savefig(figtitle)
-            plt.close(fig)
 
             for data_type in ['real']:
                 for bout_gap_length in [2.0, 3.0, 4.0]:
@@ -1246,27 +1248,30 @@ def do_nonlinear_analysis(pargs):
                                     phases_dict[bout_gap_length]['{}_{}_{}'.format(date, key, index)] = phases
 
                                     r_currences, t, e, metrics = recurrence(phases, key, method, do_stats=True)
-
-                            fig, ax = plt.subplots()
-                            plotting_helpers.plot_recurrence(r_currences, ax, method, t, e, metrics)
-                            figtitle = 'figs/analysis/Recurrence_by_{}thresh_of_phases_{}_{}_{}.png'.format(
-                                method, date, key, index
-                            )
-                            if pargs.re_norm:
-                                figtitle = 'figs/analysis/Recurrence_by_{}thresh_of_phases_0-1_{}_{}_{}.png'.format(
+                            if pargs.plot_all_nla:
+                                fig, ax = plt.subplots()
+                                plotting_helpers.plot_recurrence(r_currences, ax, method, t, e, metrics)
+                                figtitle = 'figs/analysis/Recurrence_by_{}thresh_of_phases_{}_{}_{}.png'.format(
                                     method, date, key, index
                                 )
-                            plt.tight_layout()
-                            plt.savefig(figtitle)
-                            plt.close(fig)
-
+                                if pargs.re_norm:
+                                    figtitle = 'figs/analysis/Recurrence_by_{}thresh_of_phases_0-1_{}_{}_{}.png'.format(
+                                        method, date, key, index
+                                    )
+                                plt.tight_layout()
+                                plt.savefig(figtitle)
+                                plt.close(fig)
+    gs = []
     for bout_gap_length in [2.0, 3.0, 4.0]:
-        plotting_helpers.plot_recurrence_bouts(metrics_dict[bout_gap_length], bout_gap_length)
-        plotting_helpers.plot_prc_by_key(metrics_dict[bout_gap_length], bout_gap_length)
-        extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs,
-                                 top_n=10, num_flashes=10, plot_prc=True)
-        plotting_helpers.top_bottom_aggregate_statistics(metrics_dict, bout_gap_length, top_n=10,
-                                                         num_flashes=5)
+        if pargs.plot_all_nla:
+            plotting_helpers.plot_recurrence_bouts(metrics_dict[bout_gap_length], bout_gap_length)
+            plotting_helpers.plot_prc_by_key(metrics_dict[bout_gap_length], bout_gap_length)
+            extract_top_bottom_bouts(metrics_dict, bout_gap_length, pargs,
+                                     top_n=10, num_flashes=10, plot_prc=True)
+        g = plotting_helpers.top_bottom_aggregate_statistics(metrics_dict, bout_gap_length, top_n=10,
+                                                             num_flashes=5)
+        gs.append(g)
+    return gs
 
 
 def dfa(time_series, scale_range=None, polynomial_order=2):
@@ -1558,6 +1563,7 @@ def compute_phase_response_curve(time_series_led, time_series_ff, epsilon=0.08, 
             response_times.append(response_time)
             phase_shift = response_time / previous_response_time
             phase_shifts.append(phase_shift)
+
             if only_lookback:
                 if 0.0 <= phase <= m:
                     phase_time_diff_pairs.append((phase, response_time, phase_shift, firefly_time))

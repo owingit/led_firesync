@@ -224,52 +224,103 @@ def precompute_led_onsets(led_periods_ms, sim_duration_s, led_start_s):
     return onsets
 
 
+# def load_prc_ratio_from_csv(csv_path, seed=None):
+#     """
+#     Load PRC from CSV with columns: phase, ratio, sem, n.
+#     New SEM logic (Option C):
+#         1. Draw a sample from N(ratio, sem).
+#         2. Compute z = |ratio - 1| / sem.
+#         3. Compute shrink factor in [0, 1]:
+#               shrink = clip(z / 2, 0, 1)
+#            (≈0 when effect is weak; ≈1 when effect is strong.)
+#         4. y_adj = 1 + shrink * (sample - 1)
+#     This smoothly shrinks uncertain bins toward 1 without flattening.
+#     """
+#     arr = np.genfromtxt(csv_path, delimiter=",", names=True, dtype=float)
+#
+#     x = np.asarray(arr["phase"], float)
+#     y = np.asarray(arr["ratio"], float)
+#     s = np.asarray(arr["sem"], float)
+#
+#     # keep only finite rows
+#     m = np.isfinite(x) & np.isfinite(y) & np.isfinite(s)
+#     x, y, s = x[m], y[m], s[m]
+#
+#     if x.size == 0:
+#         return x, y
+#
+#     rng = np.random.default_rng(seed)
+#
+#     # 1. Draw a stochastic sample around the mean
+#     base = rng.normal(loc=y, scale=s)
+#
+#     # 2. z-score measuring "strength" of deviation from 1
+#     z = np.abs(y - 1.0) / (s + 1e-12)
+#
+#     # 3. shrink ∈ [0,1]: linearly ramps up from z=0 to z=2+
+#     shrink = np.clip(z / 2.0, 0.0, 1.0)
+#
+#     # 4. bias-corrected value moving toward 1 when shrink small
+#     y_adj = 1.0 + shrink * (base - 1.0)
+#
+#     # 5. clip to reasonable physical range
+#     y_adj = np.clip(y_adj, 0.1, 3.0)
+#
+#     # --- sort by phase and merge duplicates ---
+#     order = np.argsort(x)
+#     x, y_adj = x[order], y_adj[order]
+#
+#     uniq_x = [x[0]]
+#     agg_y = [y_adj[0]]
+#     for xi, yi in zip(x[1:], y_adj[1:]):
+#         if np.isclose(xi, uniq_x[-1], atol=1e-12):
+#             agg_y[-1] = 0.5 * (agg_y[-1] + yi)
+#         else:
+#             uniq_x.append(xi)
+#             agg_y.append(yi)
+#
+#     return np.asarray(uniq_x, float), np.asarray(agg_y, float)
+
+
 def build_R_for_led_from_dir(save_dir, led_ms, fill="edge"):
     csv_path = Path(save_dir) / f"prc_ratio_{int(led_ms)}ms.csv"
     phases, ratios = load_prc_ratio_from_csv(csv_path)
     return make_R_from_table(phases, ratios, fill=fill)
 
 
-def load_prc_ratio_from_csv(csv_path, seed=None):
+def load_prc_ratio_from_csv(csv_path):
     """
-    Load a PRC CSV with columns: phase,ratio,sem,n -> (phases[], ratios[])
-    Applies SEM logic:
-      1) if ratio > 1 and ratio - sem < 1  -> ratio = 1.0
-      2) if ratio < 1 and ratio + sem > 1  -> ratio = 1.0
-      3) otherwise ratio ~ Uniform(ratio - sem, ratio + sem)
-    Returns strictly-monotone (phases, ratios) sorted by phase.
-    """
+    Load a PRC CSV with columns: phase,ratio,sem,n -> (phases[], ratios[]).
 
+    Deterministic empirical PRC R(φ):
+      - Use raw mean ratios,
+      - Sort by phase and merge duplicate phases by averaging ratios.
+    """
+    csv_path = Path(csv_path)
     arr = np.genfromtxt(csv_path, delimiter=",", names=True, dtype=float)
+
     x = np.asarray(arr["phase"], float)
     y = np.asarray(arr["ratio"], float)
-    s = np.asarray(arr["sem"], float)
+    s = np.asarray(arr["sem"], float)  # loaded but unused for now
 
     m = np.isfinite(x) & np.isfinite(y) & np.isfinite(s)
-    x, y, s = x[m], y[m], s[m]
-    if x.size == 0: return x, y
+    x, y = x[m], y[m]
+    if x.size == 0:
+        return x, y
 
-    rng = np.random.default_rng(seed)
-    low = y - s
-    high = y + s
-
-    hit_one = ((y > 1.0) & (low < 1.0)) | ((y < 1.0) & (high > 1.0))
-    y_adj = y.copy()
-    y_adj[hit_one] = 1.0
-    other = ~hit_one
-    if np.any(other):
-        y_adj[other] = rng.uniform(low[other], high[other])
-
+    # Sort and merge duplicate phases
     order = np.argsort(x)
-    x, y_adj = x[order], y_adj[order]
+    x, y = x[order], y[order]
+
     uniq_x = [x[0]]
-    agg_y = [y_adj[0]]
-    for xi, yi in zip(x[1:], y_adj[1:]):
+    agg_y  = [y[0]]
+    for xi, yi in zip(x[1:], y[1:]):
         if np.isclose(xi, uniq_x[-1], atol=1e-12):
             agg_y[-1] = 0.5 * (agg_y[-1] + yi)
         else:
             uniq_x.append(xi)
             agg_y.append(yi)
+
     phases = np.asarray(uniq_x, float)
     ratios = np.asarray(agg_y, float)
     return phases, ratios
@@ -337,6 +388,103 @@ def make_R_from_table(phases, ratios, fill="edge", periodic=True):
 # =========================
 # Distance functions
 # =========================
+def peak_distance_local_wasserstein(
+    sim_hist,
+    exp_hist,
+    bin_centers,
+    peak_window_ms=200.0,
+    lam=0.5,
+):
+    """
+    Peak-aware distance between experimental and simulated IFI histograms,
+    using local Wasserstein-1 distance around the experimental mode.
+
+    Parameters
+    ----------
+    sim_hist : array-like
+        Simulated histogram densities (same bins as exp_hist).
+    exp_hist : array-like
+        Experimental histogram densities.
+    bin_centers : array-like
+        Bin centers in ms (same length as histograms).
+    peak_window_ms : float, optional
+        Total window width in ms around the experimental mode within which
+        we compute the local Wasserstein distance. Default is 200 ms.
+    lam : float, optional
+        Weight on the local shape term relative to mode difference.
+        D_peak = sqrt( Δmode^2 + (lam * W_local)^2 ).
+
+    Returns
+    -------
+    D_peak : float
+        Combined distance (ms).
+    delta_mode_ms : float
+        Absolute difference in modes (ms).
+    W_local : float
+        Local Wasserstein-1 distance (ms) within the peak window.
+    """
+
+    sim_hist = np.asarray(sim_hist, float)
+    exp_hist = np.asarray(exp_hist, float)
+    bin_centers = np.asarray(bin_centers, float)
+
+    # Basic sanity checks
+    if sim_hist.size == 0 or exp_hist.size == 0:
+        return np.inf, np.nan, np.nan
+    if sim_hist.shape != exp_hist.shape or sim_hist.shape != bin_centers.shape:
+        raise ValueError("sim_hist, exp_hist, and bin_centers must have same shape")
+
+    # --- 1) Mode difference ---
+    i_exp = int(np.argmax(exp_hist))
+    i_sim = int(np.argmax(sim_hist))
+    m_exp = float(bin_centers[i_exp])
+    m_sim = float(bin_centers[i_sim])
+    delta_mode_ms = abs(m_sim - m_exp)
+
+    # --- 2) Local window around experimental mode ---
+    half_w = peak_window_ms / 2.0
+    mask = np.abs(bin_centers - m_exp) <= half_w
+
+    if not np.any(mask):
+        # No window (shouldn't happen with reasonable bins), fallback:
+        return delta_mode_ms, delta_mode_ms, np.nan
+
+    # restrict to window
+    c_local = bin_centers[mask]
+    p = exp_hist[mask].clip(min=0.0)
+    q = sim_hist[mask].clip(min=0.0)
+
+    # normalize within the window
+    p_sum = p.sum()
+    q_sum = q.sum()
+    if p_sum == 0 or q_sum == 0:
+        # one has no mass in the window → maximal disagreement locally
+        W_local = peak_window_ms
+    else:
+        p /= p_sum
+        q /= q_sum
+
+        # --- 3) Local Wasserstein-1 distance on equal-width grid ---
+        # assume approximately uniform bin spacing in c_local
+        if len(c_local) > 1:
+            # bin width (ms)
+            dx = float(np.mean(np.diff(c_local)))
+        else:
+            dx = 0.0
+
+        # CDFs
+        F_p = np.cumsum(p)
+        F_q = np.cumsum(q)
+
+        # W1 = sum |F_p - F_q| * dx
+        W_local = np.sum(np.abs(F_p - F_q)) * dx
+
+    # --- 4) Combine Δmode and local W1 into one metric ---
+    D_peak = np.sqrt(delta_mode_ms**2 + (lam * W_local)**2)
+
+    return D_peak, delta_mode_ms, W_local
+
+
 def wasserstein_from_hist(p_density, q_density, bin_edges):
     """
     1D Wasserstein (W1) between two histogram densities on common bin_edges.
@@ -824,6 +972,95 @@ def _simulate_param_task(task: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def simulate_hist_from_empirical_prc(
+    emp_arr_s,
+    R_phi,
+    led_onsets_s,
+    sim_duration_s,
+    led_start_s,
+    n_trials,
+    bins_ms,
+    led_ms,
+    rng=None,
+):
+    """
+    Simulate an oscillator whose phase is kicked by the empirical PRC R(φ):
+      ratio = T_next / T_prev
+      φ_new = φ_old + (1 - ratio)
+    """
+    emp_arr_s = np.asarray(emp_arr_s, float)
+    leds = np.asarray(led_onsets_s, float)
+    if rng is None:
+        rng = np.random.default_rng()
+
+    all_isis_ms = []
+
+    for _ in range(n_trials):
+        # free-running period drawn from empirical distribution
+        T0 = float(rng.choice(emp_arr_s))  # seconds
+
+        t = 0.0
+        phi = 0.0
+        t_spk = None
+        k = 0  # LED index
+
+        while t < sim_duration_s:
+            while k < len(leds) and leds[k] < t:
+                k += 1
+            t_led = leds[k] if k < len(leds) else np.inf
+
+            t_spike_if_free = t + (1.0 - phi) * T0
+            t_next = min(t_led, t_spike_if_free, sim_duration_s)
+            if t_next >= sim_duration_s:
+                break
+
+            if t_spike_if_free <= t_led:
+                # Spike next
+                dt = t_spike_if_free - t
+                phi += dt / T0
+                t = t_spike_if_free
+
+                if t >= led_start_s:
+                    if t_spk is not None:
+                        isi_ms = (t - t_spk) * 1000.0
+                        all_isis_ms.append(isi_ms)
+                    t_spk = t
+
+                phi -= 1.0
+
+            else:
+                # LED next
+                dt = t_led - t
+                phi += dt / T0
+                t = t_led
+
+                phi_centered = wrap_half(phi)
+                ratio = float(R_phi(phi_centered))
+                phi += (1.0 - ratio)
+
+                if phi >= 1.0:
+                    if t >= led_start_s:
+                        if t_spk is not None:
+                            isi_ms = (t - t_spk) * 1000.0
+                            all_isis_ms.append(isi_ms)
+                        t_spk = t
+                    phi -= 1.0
+
+                k += 1
+
+    if not all_isis_ms:
+        return np.zeros(len(bins_ms) - 1, dtype=float)
+
+    all_isis_ms = np.asarray(all_isis_ms, float)
+    mask = (all_isis_ms >= bins_ms[0]) & (all_isis_ms <= bins_ms[-1])
+    all_isis_ms = all_isis_ms[mask]
+    if all_isis_ms.size == 0:
+        return np.zeros(len(bins_ms) - 1, dtype=float)
+
+    hist, _ = np.histogram(all_isis_ms, bins=bins_ms, density=True)
+    return hist
+
+
 # =========================
 # Main driver with parallelization
 # =========================
@@ -832,6 +1069,7 @@ def simulate_from_prc(args):
     EMPIRICAL_PATH = args.before_path
     EXPER_PATH = args.after_path
     LED_PERIODS_MS = args.led_periods_ms
+    MC_TRIALS = 42
 
     SIM_DURATION_S = 300.0
     LED_START_S = 60.0
@@ -843,8 +1081,8 @@ def simulate_from_prc(args):
     YMAX_VALUES  = np.array(getattr(args, "ymax_values", [0.30, 0.50, 0.80]), float)
     Y0_VALUES    = np.array(getattr(args, "y0_values", [0.96, 0.98, 1.00]), float)
 
-    print(f'Running with κ={KAPPA_VALUES}, φ_c={PHIC_VALUES}, Ymax={YMAX_VALUES}, y0={Y0_VALUES}; '
-          f'{TRIALS_PER_COMBO} trials per combo')
+    print(f'Running with κ={KAPPA_VALUES}, \nφ_c={PHIC_VALUES}, \nYmax={YMAX_VALUES}, \ny0={Y0_VALUES}; '
+          f'\n{TRIALS_PER_COMBO} trials per combo')
 
     # Histogram bins for ISIs (ms)
     BINS_MS = np.linspace(200, 1400, 35)
@@ -869,6 +1107,29 @@ def simulate_from_prc(args):
             exp_hist_by_led[p_ms] = np.zeros(len(BINS_MS) - 1, dtype=float)
         else:
             exp_hist_by_led[p_ms], _ = np.histogram(exp_ms_win, bins=BINS_MS, density=True)
+    PRC_SAVE_DIR = "../figs"
+    emp_prc_hist_by_led = {}
+    rng = np.random.default_rng()
+
+    for p_ms in LED_PERIODS_MS:
+        try:
+            R_phi = build_R_for_led_from_dir(PRC_SAVE_DIR, p_ms, fill="edge")
+        except FileNotFoundError:
+            print(f"[warn] No empirical PRC CSV for LED {p_ms} ms in {PRC_SAVE_DIR}; skipping")
+            emp_prc_hist_by_led[p_ms] = None
+            continue
+
+        emp_prc_hist_by_led[p_ms] =  simulate_hist_from_empirical_prc(
+            emp_arr_s=emp_arr,
+            R_phi=R_phi,
+            led_onsets_s=LED_ONSETS_BY_P[p_ms],
+            sim_duration_s=SIM_DURATION_S,
+            led_start_s=LED_START_BY_P[p_ms],
+            n_trials=MC_TRIALS,
+            bins_ms=BINS_MS,
+            led_ms=p_ms,
+            rng=rng,
+        )
 
     # ---- outputs (note: heatmaps now per-y0) ----
     best_params = {}        # per LED: overall best across all 4 dims
@@ -1132,6 +1393,15 @@ def simulate_from_prc(args):
             else:
                 axTop.text(0.5, 0.50, "No sim hist for best cell", transform=axTop.transAxes,
                            ha="center", va="center")
+
+            emp_prc_hist = emp_prc_hist_by_led.get(p_ms, None)
+            if emp_prc_hist is not None and len(emp_prc_hist) == len(BINS_MS) - 1:
+                axTop.plot(
+                    BIN_CENTERS_MS, emp_prc_hist,
+                    lw=1.8, linestyle="--",
+                    label="Sim (empirical PRC)"
+                )
+
             axTop.plot(BIN_CENTERS_MS, exp_hist, lw=1.8, alpha=0.85, label="Exp")
             axTop.set_ylabel("Density")
             axTop.set_title(
@@ -1215,17 +1485,32 @@ def simulate_from_prc(args):
         axesO = axesO.ravel()
         for ax, p_ms in zip(axesO, LED_PERIODS_MS):
             bp = best_params[p_ms]
+            ax.set_title(f"LED {p_ms} ms")
+
             if bp["hist"] is None:
                 ax.text(0.5, 0.5, "No sim", transform=ax.transAxes, ha="center", va="center")
-                ax.set_title(f"LED {p_ms} ms")
                 continue
-            ax.plot(BIN_CENTERS_MS, bp["hist"], label="Sim (best)", lw=2)
+
+            # best parametric tanh-PRC sim
+            ax.plot(BIN_CENTERS_MS, bp["hist"], label="Sim (best tanh)", lw=2)
+
+            # --- NEW: empirical-PRC sim ---
+            emp_prc_hist = emp_prc_hist_by_led.get(p_ms, None)
+            if emp_prc_hist is not None and len(emp_prc_hist) == len(BINS_MS) - 1:
+                ax.plot(
+                    BIN_CENTERS_MS, emp_prc_hist,
+                    label="Sim (empirical PRC)", lw=1.7, linestyle="--"
+                )
+
+            # experimental histogram
             ax.plot(BIN_CENTERS_MS, exp_hist_by_led_plot[p_ms], label="Exp", lw=2, alpha=0.8)
-            ax.set_title(
-                f"LED {p_ms} ms\nbest: κ={bp['kappa']:.2f}, φ_c={bp['phi_c']:+.3f}, "
-                f"Ymax={bp['Ymax']:.2f}, y0={bp['y0']:.3f}, dist={bp['dist']:.3f}")
+
             ax.set_xlabel("ISI (ms)")
             ax.set_ylabel("Density")
+            ax.set_title(
+                f"LED {p_ms} ms\nbest: κ={bp['kappa']:.2f}, φ_c={bp['phi_c']:+.3f}, "
+                f"Ymax={bp['Ymax']:.2f}, y0={bp['y0']:.3f}, dist={bp['dist']:.3f}"
+            )
         axesO[0].legend()
         figO.suptitle("Best-fit simulated vs experimental ISI distributions (tanh PRC)", y=1.02, fontsize=12)
         plt.tight_layout()
@@ -1298,9 +1583,12 @@ def simulate_from_prc(args):
         return 'simulation data not saved'
 
 
+
+
+
 def load_sim_outputs(save_path='sim_data'):
     out_dir = Path(save_path)
-    manifest = json.load(open(out_dir / "manifest_triangle_prc.json"))
+    manifest = json.load(open(out_dir / "manifest_tanh_prc.json"))
     heatmaps = np.load(out_dir / manifest["files"]["heatmaps_npz"])
     with open(out_dir / manifest["files"]["best_params_json"]) as f:
         best_params = json.load(f)

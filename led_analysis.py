@@ -3,10 +3,8 @@ import csv
 import numpy as np
 import os
 
-import helpers
-import prc_simulator
-import plotting_helpers
-import exp_stat_agg_helpers
+from simulation import prc_simulator
+from helpers import plotting_helpers, exp_stat_agg_helpers, analysis_helpers
 
 
 def aggregate_timeseries(path, pargs):
@@ -91,7 +89,7 @@ if __name__ == '__main__':
     parser.add_argument('--do_prc', action='store_true', help='Whether to bother with phase response curve')
     parser.add_argument('--window_size_seconds', type=int, default=5, help='Window size, in seconds, for ts analysis')
     parser.add_argument('--re_norm', action='store_true', help='Whether to convert from -0.5 - 0.5 to 0.0 - 1.0')
-    parser.add_argument('--do_poincare', action='store_true', help='Whether to attempt Poincare plots of the phase diffs')
+    parser.add_argument('--plot_all_nla', action='store_true', help='Whether to attempt nla plots')
     parser.add_argument('--p', action='store_false', help='Whether to correct for bkgrd stack offset')
     parser.add_argument('--log', action='store_true', help='Whether to log data')
     parser.add_argument('--latex', action='store_true', help='Whether to write latex table')
@@ -112,26 +110,26 @@ if __name__ == '__main__':
     parser.add_argument(
         '--kappa_values', '--kappas', dest='kappa_values',
         nargs='+', type=float,
-        default=list(np.arange(2.0, 22.0 + 1e-9, 2)),
-        help='κ sweep (start=2, stop=10, step=0.5)'
+        default=list(np.arange(4.0, 12.0 + 1e-9, 2)),
+        help='κ sweep (start=2, stop=24, step=2)'
     )
     parser.add_argument(
         '--phi_c_values', '--phic', dest='phi_c_values',
         nargs='+', type=float,
-        default=list(np.arange(-0.3, 0.3 + 1e-9, 0.05)),
-        help='φ_c sweep (start=-0.10, stop=0.10, step=0.02)'
+        default=list(np.arange(-0.3, 0.3 + 1e-9, 0.15)),
+        help='φ_c sweep (start=-0.30, stop=0.30, step=0.02)'
     )
     parser.add_argument(
         '--ymax_values', '--ymax', dest='ymax_values',
         nargs='+', type=float,
-        default=list(np.arange(0.0, 2.0 + 1e-9, 0.20)),
-        help='Y_max sweep (start=0.20, stop=1.20, step=0.10)'
+        default=list(np.arange(0.6, 1.4 + 1e-9, 0.20)),
+        help='Y_max sweep (start=0.20, stop=2.0, step=0.20)'
     )
     parser.add_argument(
         '--y0_values', '--y0', dest='y0_values',
         nargs='+', type=float,
-        default=list(np.arange(0.5, 1.5 + 1e-9, 0.1)),
-        help='y0 sweep (start=0.7, stop=1.4, step=0.1)'
+        default=list(np.arange(1.0, 1.8 + 1e-9, 0.2)),
+        help='y0 sweep (start=1.0, stop=1.6, step=0.1)'
     )
     parser.add_argument(
         '--led_periods_ms',
@@ -145,13 +143,13 @@ if __name__ == '__main__':
     parser.add_argument('--show_overlay', action='store_true')
     parser.add_argument('--save_sim_figs', action='store_true')
     parser.add_argument('--save_sim_data', action='store_true')
-    parser.add_argument('--simulation_save_path', type=str, default='sim_data')
+    parser.add_argument('--simulation_save_path', type=str, default='sim_data/together')
     args = parser.parse_args()
 
     if args.write_timeseries:
         plotting_helpers.write_timeseries_figs(args)
     if args.do_nla:
-        helpers.do_nonlinear_analysis(args)
+        data = analysis_helpers.do_nonlinear_analysis(args)
     if args.investigate:
         investigate_timeseries(args)
 

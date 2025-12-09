@@ -23,12 +23,11 @@ from scipy.stats import trim_mean, sem, t
 from statsmodels.regression.linear_model import OLS
 from statsmodels.tools import add_constant
 
-import helpers
+from helpers import analysis_helpers
 
 from dataclasses import dataclass
 from scipy.optimize import least_squares
 from pathlib import Path
-
 
 
 DET_FILTER_LEVEL = 0.7
@@ -815,7 +814,7 @@ def plot_autocorrelation(phases, title):
     """
     # Convert to numpy array if not already
     phase_diff = np.array(phases)
-    autocorrelation = helpers.circular_autocorrelation(phase_diff)
+    autocorrelation = analysis_helpers.circular_autocorrelation(phase_diff)
     lags = np.arange(1, len(autocorrelation) + 1)
 
     plt.figure(figsize=(6, 6))
@@ -927,7 +926,7 @@ def write_timeseries_figs(pargs):
         with open(path, 'r') as data_file:
             ts = {'ff': [], 'led': []}
             data = list(csv.reader(data_file))
-            temp = helpers.get_temp_from_experiment_date(date, index)
+            temp = analysis_helpers.get_temp_from_experiment_date(date, index)
             if date[0] == '0':
                 date = date[-4:] + date[:-4]
             for line in data[1:]:
@@ -948,7 +947,7 @@ def write_timeseries_figs(pargs):
             masked_led = led_ys > 0.50
 
             if pargs.with_stats:
-                _, _, pairs, period = helpers.compute_phase_response_curve(
+                _, _, pairs, period = analysis_helpers.compute_phase_response_curve(
                     time_series_led=led_xs_flashes,
                     time_series_ff=ff_xs_flashes,
                     epsilon=0.08,
@@ -965,9 +964,9 @@ def write_timeseries_figs(pargs):
 
                 times, phases, responses, shifts = zip(*[(t, p, r, s) for p, r, s, t in pairs])
                 if pargs.re_norm:
-                    phases = helpers.renorm_phases(phases)
+                    phases = analysis_helpers.renorm_phases(phases)
 
-                phase_derivative = helpers.sliding_time_window_derivative(times, phases,
+                phase_derivative = analysis_helpers.sliding_time_window_derivative(times, phases,
                                                                           float(key)/1000,
                                                                           window_seconds=3.0)
 
@@ -976,7 +975,7 @@ def write_timeseries_figs(pargs):
                 valid_derivatives = [phase_derivative[i] for i in valid_indices]
                 all_derivs[key].append(valid_derivatives)
 
-                phase_acceleration = helpers.sliding_time_window_derivative(valid_times, valid_derivatives,
+                phase_acceleration = analysis_helpers.sliding_time_window_derivative(valid_times, valid_derivatives,
                                                                             float(key)/1000,
                                                                             window_seconds=3.0)
                 valid_indices_2nd = [i for i, val in enumerate(phase_acceleration) if val is not None]
@@ -1127,7 +1126,7 @@ def write_timeseries_figs(pargs):
                 # Aggregate shifts per phase
                 for p, s in zip(phases, shifts):
                     p = round(p, 6)
-                    if helpers.MIN_CUTOFF_PERIOD <= s <= helpers.MAX_CUTOFF_PERIOD:
+                    if analysis_helpers.MIN_CUTOFF_PERIOD <= s <= analysis_helpers.MAX_CUTOFF_PERIOD:
                         shift_sums[p][0] += s
                         shift_sums[p][1] += 1
 
@@ -1145,7 +1144,7 @@ def write_timeseries_figs(pargs):
                 to_plot_phases = []
                 to_plot_shifts = []
                 for p, s in zip(phases, shifts):
-                    if helpers.MIN_CUTOFF_PERIOD <= s <= helpers.MAX_CUTOFF_PERIOD:
+                    if analysis_helpers.MIN_CUTOFF_PERIOD <= s <= analysis_helpers.MAX_CUTOFF_PERIOD:
                         to_plot_phases.append(p)
                         to_plot_shifts.append(s)
                 if len(to_plot_shifts) > 3:
@@ -1250,7 +1249,7 @@ def write_timeseries_figs(pargs):
                                     """
 
                     # aggregate PRC
-                    fit_y = helpers.fit_prc(to_plot_phase_avgs, to_plot_shift_avgs, date, key, index)
+                    fit_y = analysis_helpers.fit_prc(to_plot_phase_avgs, to_plot_shift_avgs, date, key, index)
                     is_always_positive = True
                     for fy in fit_y:
                         if fy < 0:
@@ -1413,7 +1412,7 @@ def write_timeseries_figs(pargs):
                     post_led_duration = round(led_xs_flashes[-1] - led_xs_flashes[0], 2)
 
                 try:
-                    temp = helpers.get_temp_from_experiment_date(date, index)
+                    temp = analysis_helpers.get_temp_from_experiment_date(date, index)
                 except Exception:
                     temp = "N/A"
 
@@ -1643,7 +1642,7 @@ def plot_statistics(rmses, ks, plot_params):
             all_phases = []
             all_phase_shifts = []
             for ps_individual in rmses['phases'][k]:
-                all_phase_shifts.append(helpers.improved_circular_normalize(ps_individual, (float(k) / 1000))[0].item())
+                all_phase_shifts.append(analysis_helpers.improved_circular_normalize(ps_individual, (float(k) / 1000))[0].item())
             ax[i].spines['top'].set_visible(False)
             ax[i].spines['right'].set_visible(False)
             if i != len(ks) - 1:
@@ -1667,7 +1666,7 @@ def plot_statistics(rmses, ks, plot_params):
             all_freqs_ = []
             for phase, freq,_ in rmses['phase_time_diffs'][k]:
                 if 0 < freq <= 0.99:
-                    all_phases_.append(helpers.improved_circular_normalize(phase, float(k)/1000)[0].item())
+                    all_phases_.append(analysis_helpers.improved_circular_normalize(phase, float(k)/1000)[0].item())
                     all_freqs_.append(freq)
 
             ax[i].spines['top'].set_visible(False)
@@ -2037,6 +2036,7 @@ def plot_statistics(rmses, ks, plot_params):
 
         color_map = sns.color_palette("husl", len(k_sorted))
 
+
         for i, k in enumerate(k_sorted):
             individual_idx = 0
             befores = rmses['individual_before'][k]
@@ -2364,7 +2364,7 @@ def inflection_score(phases, cycle_length, stability_thresh=0.05, min_region_len
         return 0.0
 
     phases = np.array(phases)
-    dphi = helpers.circular_diff(phases, cycle_length)
+    dphi = analysis_helpers.circular_diff(phases, cycle_length)
     smooth = np.convolve(np.abs(dphi), np.ones(3) / 3, mode='valid')
     is_stable = smooth < stability_thresh
 
@@ -2379,8 +2379,8 @@ def inflection_score(phases, cycle_length, stability_thresh=0.05, min_region_len
         if pre_start < 0 or post_end > len(phases):
             continue
 
-        pre_var = helpers.circular_variance(phases[pre_start:idx], cycle_length)
-        post_var = helpers.circular_variance(phases[idx:post_end], cycle_length)
+        pre_var = analysis_helpers.circular_variance(phases[pre_start:idx], cycle_length)
+        post_var = analysis_helpers.circular_variance(phases[idx:post_end], cycle_length)
 
         score = pre_var - post_var
         best_score = max(best_score, abs(score))
@@ -2431,7 +2431,7 @@ def inflection_points(metrics_dict, bout_gap_length, top_n=10, num_flashes=5):
                 s_hifts.append(s)
 
         p_hases = np.array(p_hases)
-        p_hases = helpers.improved_circular_normalize(p_hases, float(group_key) / 1000)[0]
+        p_hases = analysis_helpers.improved_circular_normalize(p_hases, float(group_key) / 1000)[0]
         if not isinstance(p_hases, np.ndarray):
             p_hases = np.array(p_hases)
         s_hifts = np.array([np.nan if s is None else s for s in s_hifts], dtype=float)
@@ -2533,11 +2533,11 @@ def top_bottom_aggregate_statistics(metrics_dict, bout_gap_length, top_n=10, num
 
         phase_derivs = []
         for bout in top:
-            phase_derivs.extend(helpers.circular_diff(bout[1]['phases'], float(group_key) / 1000))
+            phase_derivs.extend(analysis_helpers.circular_diff(bout[1]['phases'], float(group_key) / 1000))
         ax.hist(phase_derivs, density=True, bins=np.arange(-0.51, 0.51, 0.033), color=color, alpha=0.6)
         phase_derivs = []
         for bout in bottom:
-            phase_derivs.extend(helpers.circular_diff(bout[1]['phases'], float(group_key) / 1000))
+            phase_derivs.extend(analysis_helpers.circular_diff(bout[1]['phases'], float(group_key) / 1000))
         ax.hist(phase_derivs, density=True, bins=np.arange(-0.51, 0.51, 0.033), color='black', alpha=0.6)
         ax.spines['right'].set_visible(False)
         ax.spines['top'].set_visible(False)
@@ -2561,11 +2561,11 @@ def top_bottom_aggregate_statistics(metrics_dict, bout_gap_length, top_n=10, num
 
         phase_derivs = []
         for bout in top:
-            phase_derivs.extend(helpers.circular_diff_normalized(bout[1]['phases'], float(group_key) / 1000))
+            phase_derivs.extend(analysis_helpers.circular_diff_normalized(bout[1]['phases'], float(group_key) / 1000))
         ax.hist(phase_derivs, density=True, bins=np.arange(-0.51, 0.51, 0.05), color=color, alpha=0.6)
         phase_derivs = []
         for bout in bottom:
-            phase_derivs.extend(helpers.circular_diff_normalized(bout[1]['phases'], float(group_key) / 1000))
+            phase_derivs.extend(analysis_helpers.circular_diff_normalized(bout[1]['phases'], float(group_key) / 1000))
         ax.hist(phase_derivs, density=True, bins=np.arange(-0.51, 0.51, 0.05), color='black', alpha=0.6)
         ax.spines['right'].set_visible(False)
         ax.spines['top'].set_visible(False)
@@ -2591,8 +2591,8 @@ def top_bottom_aggregate_statistics(metrics_dict, bout_gap_length, top_n=10, num
 
         ax.hist(top_responses, bins=np.arange(0.0, 2.0, 0.03), density=True,
                 color=color, alpha=0.6, label='Top 10')
-        ax.hist(bottom_responses, bins=np.arange(0.0, 2.0, 0.03), density=True,
-                color='black', alpha=0.6, label='Bottom 10')
+        # ax.hist(bottom_responses, bins=np.arange(0.0, 2.0, 0.03), density=True,
+        #         color='black', alpha=0.6, label='Bottom 10')
         ax.spines['right'].set_visible(False)
         ax.spines['top'].set_visible(False)
 
@@ -2610,7 +2610,7 @@ def top_bottom_aggregate_statistics(metrics_dict, bout_gap_length, top_n=10, num
     plt.savefig('figs/period_responses_topbottom_{}.png'.format(bout_gap_length))
     plt.close()
     fig, ax, results = analyze_firefly_led_synchronization(grouped)
-    print_sync_statistics(results)
+    return grouped
 
 
 def analyze_firefly_led_synchronization(grouped, figsize=(12, 8)):
@@ -2644,8 +2644,76 @@ def analyze_firefly_led_synchronization(grouped, figsize=(12, 8)):
     colors = plt.cm.viridis_r(np.linspace(0, 1, len(sorted_keys)))
 
     all_results = {}
+    all_ts = {}
+    fig, ax = plt.subplots()
 
     for ci, freq in enumerate(sorted_keys):
+        trials = grouped[freq]
+
+        period_sec = float(freq) / 1000.0
+        f = 1.0 / period_sec
+
+        vals = []
+        for trial in trials:
+            activations = trial[3]
+            T_trial = trial[1]['duration']
+            cycles = T_trial / period_sec
+            vals.append(activations / cycles)
+
+        vals = np.array(vals)
+        mean_per_cycle = vals.mean()
+        err = sem(vals)
+
+        ax.errorbar(
+            float(freq), mean_per_cycle,
+            yerr=err,
+            fmt='o', capsize=4, color='C0'
+        )
+
+    ax.set_xlabel("LED Period (ms)")
+    ax.set_ylabel("Firefly Flashes per LED cycle")
+    plt.savefig('figs/flashes_per_cycle.png')
+    plt.close()
+    fig, ax = plt.subplots()
+
+    for freq in sorted_keys:
+        trials = grouped[freq]
+
+        # aggregate activations per trial ID
+        per_trial_activs = {}  # trial_id -> total activations
+
+        for trial in trials:
+            trial_id = trial[0]
+            meta = trial[1]
+            activ = trial[3]
+
+            if meta['start_idx'] < 360 and meta['end_idx'] < 360:
+                per_trial_activs.setdefault(trial_id, 0)
+                per_trial_activs[trial_id] += activ
+
+        if not per_trial_activs:
+            continue
+
+        vals = np.array(list(per_trial_activs.values()))  # one value per trial_ID
+        mean_val = vals.mean()
+        sem_val = vals.std(ddof=1) / np.sqrt(len(vals))  # SEM
+
+        ax.errorbar(
+            float(freq), mean_val,
+            yerr=sem_val,
+            fmt="o",
+            color="blue",
+            capsize=4,
+        )
+        print(freq, mean_val, "+/-", sem_val)
+
+    ax.set_xlabel("LED Period (ms)")
+    ax.set_ylabel("Mean activations per trial")
+    plt.savefig('figs/flashes_per_trial.png')
+    plt.close()
+
+    for ci, freq in enumerate(sorted_keys):
+        all_ts[freq]=[]
         print(f"Processing {freq} ms frequency...")
         color = colors[ci]
         led_period = float(freq) / 1000.0
@@ -2700,15 +2768,18 @@ def analyze_firefly_led_synchronization(grouped, figsize=(12, 8)):
                     elif SELECTION_MODE == "midpoint":
                         mid = 0.5 * (t_prev + t_next)
                         L = leds_inside[np.argmin(np.abs(leds_inside - mid))]
+                    elif SELECTION_MODE == "last":
+                        L = leds_inside[-1]
                     else:
                         L = leds_inside[0]  # default
 
                     # phase relative to the *ongoing* cycle
-                    phi = _wrap_half((t_prev - L) / T_prev)  # [-0.5, 0.5)
+                    phi = _wrap_half((L - t_prev) / T_prev)  # [-0.5, 0.5)
                     phases.append(phi)
 
                     # ordinate: next/prev ratio
                     ratios.append(T_next / T_prev)
+                    all_ts[freq].append(T_next)
 
             except Exception:
                 continue
@@ -2720,7 +2791,7 @@ def analyze_firefly_led_synchronization(grouped, figsize=(12, 8)):
         phases = np.asarray(phases, float)
         ratios = np.asarray(ratios, float)
         good = np.isfinite(phases) & np.isfinite(ratios) & (phases >= -0.5) & (phases < 0.5)
-        phases = phases[good];
+        phases = phases[good]
         ratios = ratios[good]
 
         bin_idx = np.digitize(phases, phase_edges, right=False) - 1
@@ -2751,6 +2822,14 @@ def analyze_firefly_led_synchronization(grouped, figsize=(12, 8)):
             "counts_full": n_per.copy(),
         }
 
+    ss_c = all_results['770']['color']
+    th_c = all_results['300']['color']
+    tmp = all_results['300']
+    all_results['300'] = all_results['770']
+    all_results['770'] = tmp
+    all_results['770']['color'] = ss_c
+    all_results['300']['color'] = th_c
+
     # ---------------- Figure A: combined ----------------
     fig_comb, ax_comb = plt.subplots(figsize=figsize)
     for freq in sorted(all_results.keys(), key=lambda x: float(x)):
@@ -2758,13 +2837,13 @@ def analyze_firefly_led_synchronization(grouped, figsize=(12, 8)):
         ax_comb.plot(
             rec["x"], rec["y"],
             marker='o', linestyle='-', linewidth=2, markersize=7,
-            color=rec["color"], markerfacecolor=rec["color"], markeredgecolor='black',
+            color=rec["color"], markerfacecolor=rec["color"],
             alpha=0.95, label=f'{freq} ms'
         )
     ax_comb.axhline(1.0, color='black', linestyle='--', alpha=0.5, linewidth=1)
     ax_comb.axvline(0.0, color='black', linestyle='-', alpha=0.3, linewidth=1)
     ax_comb.set_xlim(-0.5, 0.5)
-    ax_comb.set_xlabel('Firefly - LED Phase (- firefly before, + firefly after)')
+    ax_comb.set_xlabel('Firefly - LED Phase (- firefly ahead, + firefly behind)')
     ax_comb.set_ylabel('Period change (T_next / T_prev)')
     ax_comb.set_title('PRC (ratio) — Combined')
     ax_comb.grid(True, alpha=0.3)
@@ -2783,7 +2862,7 @@ def analyze_firefly_led_synchronization(grouped, figsize=(12, 8)):
         ax_i.plot(
             rec["x"], rec["y"],
             marker='o', linestyle='-', linewidth=2, markersize=7,
-            color=rec["color"], markerfacecolor=rec["color"], markeredgecolor='black',
+            color=rec["color"], markerfacecolor=rec["color"],
             alpha=0.95
         )
         ax_i.axhline(1.0, color='black', linestyle='--', alpha=0.5, linewidth=1)
@@ -2792,7 +2871,6 @@ def analyze_firefly_led_synchronization(grouped, figsize=(12, 8)):
         ax_i.set_xlabel('Firefly - LED Phase (- firefly before, + firefly after)')
         ax_i.set_ylabel('Period change (T_next / T_prev)')
         ax_i.set_title(f'{freq} ms LED — PRC')
-        ax_i.grid(True, alpha=0.3)
         fig_i.tight_layout()
         if SAVE_DIR:
             fig_i.savefig(Path(SAVE_DIR) / f"prc_ratio_{int(float(freq))}ms.png", dpi=200)
@@ -2850,6 +2928,238 @@ def analyze_firefly_led_synchronization(grouped, figsize=(12, 8)):
                         w_all.writerow([int(float(freq)), f"{p:.9f}", f"{r:.9f}", f"{s:.9f}", int(nn)])
 
         print(f"[PRC] wrote CSVs to {out_dir}")
+
+    # 0-1 mapped version
+    results_by_mode = {}
+    phase_edges = np.linspace(0.0, 1.0, n_bins + 1)
+    phase_centers_global = 0.5 * (phase_edges[:-1] + phase_edges[1:])
+
+    for SELECTION_MODE in ['first', 'midpoint', 'last']:
+        if SELECTION_MODE == 'first':
+            sm = 'only_LEDs_before'
+        elif SELECTION_MODE == 'last':
+            sm = 'only_LEDs_after'
+        elif SELECTION_MODE == 'midpoint':
+            sm = 'nearest'
+        else:
+            sm = SELECTION_MODE
+
+        all_results = {}  # reset per mode
+
+        for ci, freq in enumerate(sorted_keys):
+            print(f"[{SELECTION_MODE}] Processing {freq} ms frequency...")
+            color = colors[ci]
+            led_period = float(freq) / 1000.0
+
+            phases = []
+            ratios = []
+            flash_counts = []
+
+            for j, trial in enumerate(grouped[freq]):
+                try:
+                    f_times = np.asarray(trial[1]['full_timeseries']['firefly'], dtype=float)
+                    l_times = np.asarray(trial[1]['full_timeseries']['led'], dtype=float)
+                    start = float(trial[1]['start_idx'])
+                    end = float(trial[1]['end_idx'])
+
+                    if int(trial[1]['num_flashes']) < exclude:
+                        continue
+
+                    # we only consider LED pulses that occur in the window
+                    l_win = l_times[(l_times >= start) & (l_times <= end)]
+                    if f_times.size < 3 or l_win.size == 0:
+                        continue
+                    flash_counts.append(trial[1]['num_flashes'])
+
+                    # -------- one LED per firefly cycle --------
+                    # idx_prev goes from the 2nd flash to the penultimate flash (so we have prev & next)
+                    for idx_prev in range(1, f_times.size - 1):
+                        t_prevprev = f_times[idx_prev - 1]
+                        t_prev = f_times[idx_prev]
+                        t_next = f_times[idx_prev + 1]
+
+                        # skip cycles that lie completely outside the LED window
+                        if (t_next <= start) or (t_prev >= end):
+                            continue
+
+                        T_prev = t_prev - t_prevprev
+                        T_next = t_next - t_prev
+                        if (T_prev < MIN_ISI) or (T_next < MIN_ISI):
+                            continue
+                        if T_next >= thresh * led_period:
+                            continue
+
+                        # LEDs strictly inside the cycle (with tolerance)
+                        m = (l_win > t_prev + tol) & (l_win < t_next - tol)
+                        leds_inside = l_win[m]
+                        if leds_inside.size == 0:
+                            continue
+
+                        # choose LED according to selection mode
+                        if SELECTION_MODE == "first":
+                            L = leds_inside[0]
+                        elif SELECTION_MODE == "midpoint":
+                            mid = 0.5 * (t_prev + t_next)
+                            L = leds_inside[np.argmin(np.abs(leds_inside - mid))]
+                        elif SELECTION_MODE == "last":
+                            L = leds_inside[-1]
+                        else:
+                            L = leds_inside[0]  # default
+
+                        phi = 1.0 + (t_prev - L) / T_prev
+                        if (phi <= 0.0) or (phi >= 1.0):
+                            continue
+
+                        phases.append(phi)
+
+                        # ordinate: next/prev ratio
+                        ratios.append(T_next / T_prev)
+
+                except Exception:
+                    continue
+
+            if len(phases) == 0:
+                continue
+
+            # bin to global edges in [0, 1)
+            phases = np.asarray(phases, float)
+            ratios = np.asarray(ratios, float)
+            good = (
+                    np.isfinite(phases)
+                    & np.isfinite(ratios)
+                    & (phases >= 0.0)
+                    & (phases < 1.0)
+            )
+            phases = phases[good]
+            ratios = ratios[good]
+
+            if phases.size == 0:
+                continue
+
+            bin_idx = np.digitize(phases, phase_edges, right=False) - 1
+            bin_idx = np.clip(bin_idx, 0, n_bins - 1)
+
+            y_mean = np.full(n_bins, np.nan, float)
+            y_sem = np.full(n_bins, np.nan, float)
+            n_per = np.zeros(n_bins, int)
+
+            for b in range(n_bins):
+                m = (bin_idx == b)
+                if np.any(m):
+                    vals = ratios[m]
+                    y_mean[b] = np.mean(vals)
+                    y_sem[b] = np.std(vals, ddof=1) / np.sqrt(vals.size) if vals.size >= 2 else 0.0
+                    n_per[b] = vals.size
+
+            valid = np.isfinite(y_mean)
+            if not np.any(valid):
+                continue
+
+            all_results[freq] = {
+                "color": color,
+                "x": phase_centers_global[valid],  # in [0, 1)
+                "y": y_mean[valid],
+                "sem": y_sem[valid],
+                "n": n_per[valid],
+                "counts_full": n_per.copy(),
+            }
+
+        if '300' in all_results and '770' in all_results:
+            ss_c = all_results['770']['color']
+            th_c = all_results['300']['color']
+            tmp = all_results['300']
+            all_results['300'] = all_results['770']
+            all_results['770'] = tmp
+            all_results['770']['color'] = ss_c
+            all_results['300']['color'] = th_c
+
+        results_by_mode[SELECTION_MODE] = all_results
+
+    # =======================
+    # Build ONE figure with 3 subplots (one per selection mode)
+    # =======================
+    Path(SAVE_DIR).mkdir(parents=True, exist_ok=True)
+
+    mode_order = ['first', 'midpoint', 'last']
+    mode_labels = {
+        'first': 'only_LEDs_before',
+        'midpoint': 'nearest',
+        'last': 'only_LEDs_after',
+    }
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+
+    for ax, mode in zip(axes, mode_order):
+        all_results = results_by_mode.get(mode, {})
+        if not all_results:
+            ax.set_visible(False)
+            continue
+
+        label_suffix = mode_labels[mode]
+
+        for freq in sorted(all_results.keys(), key=lambda x: float(x)):
+            rec = all_results[freq]
+            ax.plot(
+                rec["x"], rec["y"],
+                marker='o', linestyle='-', linewidth=2, markersize=6,
+                color=rec["color"], markerfacecolor=rec["color"], markeredgecolor='black',
+                alpha=0.85,
+                label=f'{freq} ms'
+            )
+
+        ax.axhline(1.0, color='black', linestyle='--', alpha=0.5, linewidth=1)
+        ax.axvline(0.0, color='black', linestyle='-', alpha=0.3, linewidth=1)
+        ax.set_xlim(0.0, 1.0)
+        ax.set_xlabel('LED phase in firefly cycle (0–1)')
+        ax.set_title(f'PRC (ratio) — {label_suffix}')
+
+    axes[0].set_ylabel('Period change (T_next / T_prev)')
+
+    # put legend on the last visible axis
+    last_ax = axes[-1]
+    handles, labels = last_ax.get_legend_handles_labels()
+    if handles:
+        last_ax.legend(handles, labels, bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9)
+
+    fig.tight_layout()
+    fig.savefig(Path(SAVE_DIR) / "prc_ratio_3modes_panel.png", dpi=300)
+    plt.close(fig)
+    with open('simulation/all_befores_from_experiments.pickle', 'rb') as file:
+        all_befores = pickle.load(file)
+    allbefores = [x for y in all_befores.values() for x in y]
+    sns.set(style='white')
+    colormap = cm.get_cmap('viridis_r', 24)
+    fig, ax = plt.subplots(9)
+    ax[0].hist(allbefores, density=True, bins=np.arange(0.0, 2.0, 0.03), color='darkgray')
+    ax[0].spines['top'].set_visible(False)
+    ax[0].spines['right'].set_visible(False)
+    ax[0].spines['bottom'].set_color('lightgray')  # X-axis line
+    ax[0].spines['left'].set_color('lightgray')  # Y-axis line
+    ax[0].spines['bottom'].set_linewidth(2)
+    ax[0].spines['left'].set_linewidth(2)
+    ax[0].set_xlim(0.0, 2.1)
+    ax[0].set_ylim(0.0, 6.0)
+
+    for i, k in enumerate(all_ts.keys()):
+        i = i + 1
+        ax[i].hist(all_ts[k], density=True, bins=np.arange(0.0, 2.0, 0.03), color=colormap.__call__((i - 1) * 3),
+                   alpha=0.8)
+        ax[i].spines['top'].set_visible(False)
+        ax[i].spines['right'].set_visible(False)
+        ax[i].spines['bottom'].set_color('lightgray')  # X-axis line
+        ax[i].spines['left'].set_color('lightgray')  # Y-axis line
+        ax[i].spines['bottom'].set_linewidth(2)
+        ax[i].spines['left'].set_linewidth(2)
+        ax[i].set_ylim(0.0, 6.0)
+        ax[i].set_xlim(0.0, 2.1)
+        ax[i].axvline(float(k) / 1000, color='black')
+        ax[i].axvline(0.5 * (float(k) / 1000), color='black', linestyle='--')
+        ax[i].axvline(2.0 * (float(k) / 1000), color='black', linestyle=':')
+    plt.savefig('figs/fig2a_from_bouts')
+    plt.close()
+    for k in all_ts.keys():
+        print(np.mean(all_befores[k]), np.std(all_befores[k]), np.mean(all_ts[k]), np.std(all_ts[k]),
+              np.median(all_ts[k]), scipy.stats.mode(all_ts[k])[0])
 
     return fig_mean, ax_mean, all_results
 
@@ -3576,7 +3886,7 @@ def r_and_z(datafile='figs'):
 
     fits = fit_models_across_leds(led_periods_ms, data_per_led, models=models)
 
-    out_root = Path("sim_data/impulse_comparison")
+    out_root = Path("../sim_data/impulse_comparison")
     out_root.mkdir(parents=True, exist_ok=True)
 
     generated = []
