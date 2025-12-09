@@ -57,10 +57,9 @@ You can install dependencies via:
 
 ## Usage
 ``` 
-python led_analysis.py -w -i -a \
-  --with_stats \
+python led_analysis.py -w -a \
+  --do_ffrt \
   --re_norm \
-  --do_windowed_period_plot \
   --save_folder ./figs/
 ```
 
