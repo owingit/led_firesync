@@ -1583,9 +1583,6 @@ def simulate_from_prc(args):
         return 'simulation data not saved'
 
 
-
-
-
 def load_sim_outputs(save_path='sim_data'):
     out_dir = Path(save_path)
     manifest = json.load(open(out_dir / "manifest_tanh_prc.json"))

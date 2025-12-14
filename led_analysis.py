@@ -101,8 +101,8 @@ if __name__ == '__main__':
                         help='Folder path for saving')
 
     parser.add_argument('--prc_json_path', type=str, default='./saved_prc_normalized.json')
-    parser.add_argument('--before_path', type=str, default='./all_befores_from_experiments.pickle')
-    parser.add_argument('--after_path', type=str, default='./all_afters_from_experiments.pickle')
+    parser.add_argument('--before_path', type=str, default='./simulation/all_befores_from_experiments.pickle')
+    parser.add_argument('--after_path', type=str, default='./simulation/all_afters_from_experiments.pickle')
     parser.add_argument('--simulation_trials', type=int, default=20)
 
     # --- NEW: parameter grids for tanh PRC ---
