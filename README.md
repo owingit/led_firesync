@@ -21,23 +21,23 @@ These metrics are compared against simulations using phenomenological PRC models
 
 led_firesync/
 
+├── arduino/   
 ├── data_paths/   
-├── simulation/    
 ├── figs/   
-├── temp_data/  
 ├── helpers/   
-├── arduino/
+├── simulation/    
+├── temp_data/  
 ├── led_analysis.py  
 └── README.md 
 
 ### Description of key directories / files
 
+- **arduino/** — Class and header file defining the LED flash pattern generator. Before use, the operator can change the LED period parameter as needed and deploy to an Arduino Uno or Nano, connected to an LED as defined below, to produce the light patterns. 
 - **data_paths/** — All experimental flash-timing data in CSV format. Each file is coded by the date and LED period as well as a unique index, of the form <MMDDYYYY_LEDPERIOD_INDEX>.csv. Within each file is a list of firefly time/state tuples and LED time/state tuples, representing the timeseries for the firefly (off=0, flash=1) and the timeseries for the LED (off=1, flash=2), respectively 
-- **simulation/** — Code to simulate PRCs, entrainment, and frequency responses; includes saved model parameters from simulation.
-- **temp_data/** — Contains environmental metadata (temperature, etc.) associated with trials.
 - **figs/** — Saved static and interactive figures; `timeseries/` contains HTML representations for exploratory analysis.
 - **helpers/** — Common plotting functions, period histogram utilities, statistical aggregation tools, file I/O helpers. Additionally the folder ```preprocessing``` containing the video analysis code.
-- **arduino/** — Class and header file defining the LED flash pattern generator. Before use, the operator can change the LED period parameter as needed and deploy to an Arduino Uno or Nano, connected to an LED as defined below, to produce the light patterns. 
+- **simulation/** — Code to simulate PRCs, entrainment, and frequency responses; includes saved model parameters from simulation.
+- **temp_data/** — Contains environmental metadata (temperature, etc.) associated with trials.
 - **led_analysis.py** — Main driver script, for reproducing all analytical steps and generating figures, with many additional flags and functionalities off of the main code path for exploring alternate aspects of the data.
 
 ---
