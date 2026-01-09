@@ -84,7 +84,7 @@ This will:
 
 ## Arduino setup
 Below are some basic instructions for reproducing the LED setup.
-The breadboard should place 38k ohms of resistors and a YSL-R531Y5C-5v yellow (585-595nm) LED from sparkfun in series.
+The breadboard should place 38k ohms of resistors and a YSL-R531Y5C-5v yellow (565-585nm) LED from sparkfun in series.
 To wire the LED, connect an Arduino Uno to the breadboard with a wire in port 5 as the output and a wire in ground.
 Wire the output to a spot on the breadboard prior to the resistance and then wire to the ground after the LED.
 Modify the LED period parameter in the code to be what you are seeking, and then simply upload the code to the Uno and it will flash like a single frontalis.
